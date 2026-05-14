@@ -1,0 +1,1857 @@
+create or replace view REPORTING.SSG_REPORTS.VW_POPULATE_ADAPTIVE_EDITORIAL_KPI_BASE_TEST(
+	GRAIN,
+	PERIOD_START,
+	PLATFORM,
+	PERSONA,
+	DESK,
+	USERS,
+	DESK_AUDIENCE_USERS,
+	EVENTS,
+	USERS_LOGGED_IN,
+	EVENTS_LOGGED_IN,
+	USERS_SUBSCRIBER,
+	EVENTS_SUBSCRIBER,
+	USERS_FREE,
+	EVENTS_FREE,
+	USERS_PREMIUM,
+	EVENTS_PREMIUM,
+	USERS_BARRIER,
+	BARRIER_EVENTS,
+	NET_SUBSCRIBERS,
+	TOTAL_ACTIVE_DAYS,
+	PCT_SUBSCRIBERS_CONSUMING_PREMIUM,
+	TOTAL_FTDS_FROM_EDITORIAL,
+	TOTAL_FTDS_FROM_TC,
+	TOTAL_FTDS_FROM_RECS,
+	TOTAL_FTDS_FROM_TC_AND_RECS,
+	TOTAL_FTDS_FROM_EDITORIAL_PLUS,
+	TOTAL_CLICKS_FROM_EDITORIAL,
+	TRAFFIC_EVENTS_TO_TC_AND_RECS,
+	TRAFFIC_VISITORS_TO_TC_AND_RECS,
+	USERS_SUBSCRIBER_ULTIMATE,
+	USERS_SUBSCRIBER_TIPPING,
+	IS_SUBSCRIBER,
+	EDITORIAL_SUBSCRIBERS,
+	SUBSCRIBER_FLAG,
+	DAILY_AVG_PCT_ULTIMATE_CONSUMING_EDITORIAL,
+	DAILY_AVG_PCT_TIPPING_CONSUMING_EDITORIAL,
+	PAGEVIEWS,
+	ACTIVE_DAYS_PER_EDITORIAL_SUBSCRIBER,
+	UNIQUE_SESSIONS,
+	PAGEVIEWS_PER_UNIQUE_SESSION,
+    PAGEVIEWS_PER_USER_PER_SESSION,
+	PAGEVIEWS_PER_SESSION_DOW_AVG,
+	PAGEVIEWS_VS_DOW_AVG,
+	PAGEVIEWS_PCT_VS_DOW_AVG,
+	PREMIUM_EDITORIAL_USERS,
+	FREE_EDITORIAL_USERS,
+	EDITORIAL_CLICKS_BY_SOURCE,
+	FTDS_BY_SOURCE,
+	TC_CLICKS,
+	FTD_SOURCE,
+	TC_TRAFFIC_EVENTS,
+	RC_TRAFFIC_EVENTS,
+	AVG_PAGEVIEWS_PER_STORY,
+	PCT_STORIES_BY_TIME_WINDOW,
+	STORIES_PUBLISHED
+) as
+
+WITH params AS (
+    SELECT TO_DATE('2025-01-01') AS start_date, TO_DATE('2026-03-31') AS end_date
+),
+
+-- ============================================================
+-- ALLOWLISTS
+-- ============================================================
+web_name_allowlist AS (
+    SELECT column1 AS v FROM VALUES
+    ('News'),('Horse Racing Tips'),('Bloodstock'),('Sports Tips'),('Greyhounds'),
+    ('rp recommends'),('new betting sites'),('best new customer betting sites'),
+    ('best horse racing betting sites'),('best football betting sites'),
+    ('best each way extra places betting sites'),('best lucky 15 betting sites'),
+    ('best odds guaranteed betting sites'),('best golf each way extra places betting sites'),
+    ('best betting apps'),('best horse racing betting apps'),('best football betting apps'),
+    ('best betting apps for boxing'),('best cricket betting apps'),('best golf betting apps'),
+    ('best tennis betting apps'),('best ufc betting apps'),('best nfl betting app')
+),
+rp_recommends_name_allowlist AS (
+    SELECT column1 AS v FROM VALUES
+    ('rp recommends'),('new betting sites'),('best new customer betting sites'),
+    ('best horse racing betting sites'),('best football betting sites'),
+    ('best each way extra places betting sites'),('best lucky 15 betting sites'),
+    ('best odds guaranteed betting sites'),('best golf each way extra places betting sites'),
+    ('best betting apps'),('best horse racing betting apps'),('best football betting apps'),
+    ('best betting apps for boxing'),('best cricket betting apps'),('best golf betting apps'),
+    ('best tennis betting apps'),('best ufc betting apps'),('best nfl betting app')
+),
+-- *** FIX 5: Added Greyhounds to web_parent_tax_allowlist so web Greyhounds pages are captured ***
+web_parent_tax_allowlist AS (
+    SELECT column1 AS v FROM VALUES
+    ('News'),('Horse racing tips'),('Sport'),('Video'),('Premium content'),('Bloodstock'),('Greyhounds')
+),
+web_site_section_allowlist AS (
+    SELECT column1 AS v FROM VALUES ('Bloodstock'),('Tipping')
+),
+app_parent_tax_allowlist AS (
+    SELECT column1 AS v FROM VALUES
+    ('News'),('Horse racing tips'),('Bloodstock'),('Sport'),('Most-tipped horses'),
+    ('Play of the day'),('Video'),('Exclusive tips'),('Greyhounds'),('The Big Jump Off'),
+    ('App exclusive'),('Glorious Goodwood'),('The Lookahead'),('Britain')
+),
+
+-- ============================================================
+-- SUBSCRIBER FLAGS
+-- ============================================================
+subscriber_flag AS (
+    SELECT DISTINCT
+        DATE_TRUNC('month', TRY_TO_DATE(a.DAYRANGECAPTURED))::DATE AS month_start,
+        s.CLIENTUSERID::STRING AS user_id
+    FROM REPORTING.SSG_SUBSCRIPTIONS.ACTIVESUBSCRIPTIONS_DAILY a
+    JOIN REPORTING.SSG_SUBSCRIPTIONS.SUBSCRIPTION_DAILY_STAGING s ON s.ACCOUNTID = a.ACCOUNT_ID
+    WHERE TRY_TO_DATE(a.DAYRANGECAPTURED) BETWEEN (SELECT start_date FROM params) AND (SELECT end_date FROM params)
+    AND s.CLIENTUSERID IS NOT NULL
+),
+subscriber_ultimate_flag AS (
+    SELECT DISTINCT
+        TRY_TO_DATE(a.DAYRANGECAPTURED)::DATE                         AS day_start,
+        DATE_TRUNC('month', TRY_TO_DATE(a.DAYRANGECAPTURED))::DATE    AS month_start,
+        s.CLIENTUSERID::STRING                                         AS user_id
+    FROM REPORTING.SSG_SUBSCRIPTIONS.ACTIVESUBSCRIPTIONS_DAILY a
+    JOIN REPORTING.SSG_SUBSCRIPTIONS.SUBSCRIPTION_DAILY_STAGING s
+      ON s.ACCOUNTID = a.ACCOUNT_ID
+    WHERE TRY_TO_DATE(a.DAYRANGECAPTURED)
+          BETWEEN (SELECT start_date FROM params) AND (SELECT end_date FROM params)
+    AND s.CLIENTUSERID IS NOT NULL
+    AND a.SERVICETITLE LIKE '%Ultimate%'
+),
+subscriber_tipping_flag AS (
+    SELECT DISTINCT
+        TRY_TO_DATE(a.DAYRANGECAPTURED)::DATE                         AS day_start,
+        DATE_TRUNC('month', TRY_TO_DATE(a.DAYRANGECAPTURED))::DATE    AS month_start,
+        s.CLIENTUSERID::STRING                                         AS user_id
+    FROM REPORTING.SSG_SUBSCRIPTIONS.ACTIVESUBSCRIPTIONS_DAILY a
+    JOIN REPORTING.SSG_SUBSCRIPTIONS.SUBSCRIPTION_DAILY_STAGING s
+      ON s.ACCOUNTID = a.ACCOUNT_ID
+    WHERE TRY_TO_DATE(a.DAYRANGECAPTURED)
+          BETWEEN (SELECT start_date FROM params) AND (SELECT end_date FROM params)
+    AND s.CLIENTUSERID IS NOT NULL
+    AND a.SERVICETITLE LIKE '%Tipping%'         -- ← FIX: a table, contains pattern
+),
+subscriber_ultimate_flag_month AS (
+    SELECT DISTINCT month_start, user_id
+    FROM subscriber_ultimate_flag
+),
+subscriber_tipping_flag_month AS (
+    SELECT DISTINCT month_start, user_id
+    FROM subscriber_tipping_flag
+),
+subscriber_ultimate_deduped AS (
+    -- day grain: one row per (user, day) — existing flag is already day-deduped
+    SELECT 'day'   AS grain, day_start   AS period_start, user_id FROM subscriber_ultimate_flag
+    UNION ALL
+    -- month grain: one row per (user, month) — uses the month-deduped version
+    SELECT 'month', month_start, user_id FROM subscriber_ultimate_flag_month
+),
+subscriber_tipping_deduped AS (
+    SELECT 'day'   AS grain, day_start   AS period_start, user_id FROM subscriber_tipping_flag
+    UNION ALL
+    SELECT 'month', month_start, user_id FROM subscriber_tipping_flag_month
+),
+persona_map AS (
+    SELECT
+        DATE_TRUNC('month', DATE)::DATE AS month_start,
+        LOWER(PLATFORM)                 AS src_platform,
+        UNIFIED_ID::STRING              AS unified_id,
+        CUSTOMER_SEGMENTATION           AS persona,
+        DATE                            AS persona_date
+    FROM REPORTING.SSG_PERSONAS.TBL_NEWMARKET_CUSTOMER_ALL_PERSONAS_2025_Updated_Historical_v2
+    QUALIFY ROW_NUMBER() OVER (
+        PARTITION BY DATE_TRUNC('month', DATE)::DATE, LOWER(PLATFORM), UNIFIED_ID::STRING
+        ORDER BY DATE DESC
+    ) = 1
+),
+
+-- ============================================================
+-- DESK MAPS
+-- ============================================================
+app_desk_map AS (
+    SELECT * FROM (
+        SELECT 'News' AS parent_taxonomy,'news' AS desk UNION ALL
+        SELECT 'The Big Jump Off','news' UNION ALL SELECT 'App exclusive','news' UNION ALL
+        SELECT 'Glorious Goodwood','news' UNION ALL SELECT 'The Lookahead','news' UNION ALL
+        SELECT 'Britain','news' UNION ALL SELECT 'Horse racing tips','tipping' UNION ALL
+        SELECT 'Most-tipped horses','tipping' UNION ALL SELECT 'Exclusive tips','tipping' UNION ALL
+        SELECT 'Play of the day','tipping' UNION ALL SELECT 'Sport','sport' UNION ALL
+        SELECT 'Greyhounds','greyhounds' UNION ALL SELECT 'Bloodstock','bloodstock'
+    )
+),
+web_desk_map AS (
+    SELECT * FROM (
+        SELECT 'News' AS parent_taxonomy,'news' AS desk UNION ALL
+        SELECT 'Guide to Racing','news' UNION ALL SELECT 'Play of the day','news' UNION ALL
+        SELECT 'The Big Jump Off','news' UNION ALL SELECT 'The Sunday Read','news' UNION ALL
+        SELECT 'App exclusive','news' UNION ALL SELECT 'Horse racing tips','tipping' UNION ALL
+        SELECT 'Most-tipped horses','tipping' UNION ALL SELECT 'Exclusive tips','tipping' UNION ALL
+        SELECT 'Sport','sport' UNION ALL SELECT 'Greyhounds','greyhounds' UNION ALL
+        SELECT 'Bloodstock','bloodstock' UNION ALL SELECT 'Premium content','premium_features'
+    )
+),
+
+-- ============================================================
+-- WEB STITCHING
+-- ============================================================
+web_pages_base AS (
+    SELECT
+        p.TIMESTAMP, p.USER_ID, p.ANONYMOUS_ID, p.PARENT_TAXONOMY, p.NAME,
+        p.SITE_SECTION, p.PREMIUM_CONTENT, p.PAYWALL_BARRIER, p.URL, p.PATH,
+        NULLIF(TRIM(p.USER_ID), '')                                     AS user_id_norm,
+        DATE_TRUNC('day',   p.TIMESTAMP::TIMESTAMP_NTZ)                 AS day_key,
+        DATE_TRUNC('month', p.TIMESTAMP::TIMESTAMP_NTZ)                 AS month_key,
+        MAX(IFF(
+            NULLIF(TRIM(p.USER_ID),'') IS NOT NULL
+            AND LENGTH(NULLIF(TRIM(p.USER_ID),'')) <= 10
+            AND REGEXP_LIKE(NULLIF(TRIM(p.USER_ID),''),'^[0-9]+$')
+AND p.NAME = 'Article'
+AND p.PARENT_TAXONOMY IN ('News','Horse racing tips','Sport','Bloodstock'),
+            NULLIF(TRIM(p.USER_ID),''), NULL
+        )) OVER (
+            PARTITION BY DATE_TRUNC('month', p.TIMESTAMP::TIMESTAMP_NTZ), p.ANONYMOUS_ID
+        )                                                               AS stitched_user_id_month,
+        CONDITIONAL_TRUE_EVENT(
+            DATEDIFF('minute',
+                LAG(p.TIMESTAMP::TIMESTAMP_NTZ) OVER (PARTITION BY p.ANONYMOUS_ID ORDER BY p.TIMESTAMP::TIMESTAMP_NTZ),
+                p.TIMESTAMP::TIMESTAMP_NTZ
+            ) > 30
+            OR LAG(p.TIMESTAMP::TIMESTAMP_NTZ) OVER (PARTITION BY p.ANONYMOUS_ID ORDER BY p.TIMESTAMP::TIMESTAMP_NTZ) IS NULL
+        ) OVER (PARTITION BY p.ANONYMOUS_ID ORDER BY p.TIMESTAMP::TIMESTAMP_NTZ) AS session_number
+    FROM SEGMENT_EVENTS.RACING_POST_JANUS_WEB_LIVE.PAGES p
+    WHERE p.TIMESTAMP::DATE BETWEEN (SELECT start_date FROM params) AND (SELECT end_date FROM params)
+),
+web_pages_stitched AS (
+    SELECT *, CONCAT(ANONYMOUS_ID, '-', session_number::VARCHAR) AS session_id
+    FROM web_pages_base
+),
+
+-- ============================================================
+-- iOS / ANDROID SESSION DETECTION
+-- ============================================================
+ios_session_base AS (
+    SELECT ORIGINAL_TIMESTAMP,
+        COALESCE(NULLIF(TRIM(USER_ID),''), CONTEXT_DEVICE_ID) AS device_key,
+        CONDITIONAL_TRUE_EVENT(
+            DATEDIFF('minute',
+                LAG(ORIGINAL_TIMESTAMP) OVER (PARTITION BY COALESCE(NULLIF(TRIM(USER_ID),''),CONTEXT_DEVICE_ID) ORDER BY ORIGINAL_TIMESTAMP),
+                ORIGINAL_TIMESTAMP) > 30
+            OR LAG(ORIGINAL_TIMESTAMP) OVER (PARTITION BY COALESCE(NULLIF(TRIM(USER_ID),''),CONTEXT_DEVICE_ID) ORDER BY ORIGINAL_TIMESTAMP) IS NULL
+        ) OVER (PARTITION BY COALESCE(NULLIF(TRIM(USER_ID),''),CONTEXT_DEVICE_ID) ORDER BY ORIGINAL_TIMESTAMP) AS session_number
+    FROM SEGMENT_EVENTS.RACING_POST_JANUS_IOS_LIVE.TRACKS
+    WHERE ORIGINAL_TIMESTAMP::DATE BETWEEN (SELECT start_date FROM params) AND (SELECT end_date FROM params)
+),
+ios_sessions AS (
+    SELECT device_key, ORIGINAL_TIMESTAMP, CONCAT(device_key,'-',session_number::VARCHAR) AS session_id
+    FROM ios_session_base
+),
+android_session_base AS (
+    SELECT ORIGINAL_TIMESTAMP,
+        COALESCE(NULLIF(TRIM(USER_ID),''), CONTEXT_DEVICE_ID) AS device_key,
+        CONDITIONAL_TRUE_EVENT(
+            DATEDIFF('minute',
+                LAG(ORIGINAL_TIMESTAMP) OVER (PARTITION BY COALESCE(NULLIF(TRIM(USER_ID),''),CONTEXT_DEVICE_ID) ORDER BY ORIGINAL_TIMESTAMP),
+                ORIGINAL_TIMESTAMP) > 30
+            OR LAG(ORIGINAL_TIMESTAMP) OVER (PARTITION BY COALESCE(NULLIF(TRIM(USER_ID),''),CONTEXT_DEVICE_ID) ORDER BY ORIGINAL_TIMESTAMP) IS NULL
+        ) OVER (PARTITION BY COALESCE(NULLIF(TRIM(USER_ID),''),CONTEXT_DEVICE_ID) ORDER BY ORIGINAL_TIMESTAMP) AS session_number
+    FROM SEGMENT_EVENTS.RACING_POST_JANUS_ANDROID_LIVE.TRACKS
+    WHERE ORIGINAL_TIMESTAMP::DATE BETWEEN (SELECT start_date FROM params) AND (SELECT end_date FROM params)
+),
+android_sessions AS (
+    SELECT device_key, ORIGINAL_TIMESTAMP, CONCAT(device_key,'-',session_number::VARCHAR) AS session_id
+    FROM android_session_base
+),
+
+-- ============================================================
+-- TOTAL BASE
+-- ============================================================
+ios_total AS (
+    SELECT DATE_TRUNC('day',t.ORIGINAL_TIMESTAMP) AS day, DATE_TRUNC('month',t.ORIGINAL_TIMESTAMP) AS month,
+        'app' AS platform, NULLIF(TRIM(t.USER_ID),'') AS user_id_raw,
+        COALESCE(NULLIF(TRIM(t.USER_ID),''),t.CONTEXT_DEVICE_ID) AS person_key,
+        CASE WHEN NULLIF(TRIM(t.USER_ID),'') IS NOT NULL THEN NULLIF(TRIM(t.USER_ID),'')
+             ELSE CONCAT('ios:',t.CONTEXT_DEVICE_ID) END AS monthly_key,
+        IFF(NULLIF(TRIM(t.USER_ID),'') IS NOT NULL AND LENGTH(NULLIF(TRIM(t.USER_ID),''))<=10
+            AND REGEXP_LIKE(NULLIF(TRIM(t.USER_ID),''),'^[0-9]+$'),TRUE,FALSE) AS is_logged_in,
+        s.session_id
+    FROM SEGMENT_EVENTS.RACING_POST_JANUS_IOS_LIVE.TRACKS t
+    LEFT JOIN ios_sessions s ON s.device_key=COALESCE(NULLIF(TRIM(t.USER_ID),''),t.CONTEXT_DEVICE_ID) AND s.ORIGINAL_TIMESTAMP=t.ORIGINAL_TIMESTAMP
+    WHERE t.ORIGINAL_TIMESTAMP::DATE BETWEEN (SELECT start_date FROM params) AND (SELECT end_date FROM params)
+),
+android_total AS (
+    SELECT DATE_TRUNC('day',t.ORIGINAL_TIMESTAMP) AS day, DATE_TRUNC('month',t.ORIGINAL_TIMESTAMP) AS month,
+        'app' AS platform, NULLIF(TRIM(t.USER_ID),'') AS user_id_raw,
+        COALESCE(NULLIF(TRIM(t.USER_ID),''),t.CONTEXT_DEVICE_ID) AS person_key,
+        CASE WHEN NULLIF(TRIM(t.USER_ID),'') IS NOT NULL THEN NULLIF(TRIM(t.USER_ID),'')
+             ELSE CONCAT('android:',t.CONTEXT_DEVICE_ID) END AS monthly_key,
+        IFF(NULLIF(TRIM(t.USER_ID),'') IS NOT NULL AND LENGTH(NULLIF(TRIM(t.USER_ID),''))<=10
+            AND REGEXP_LIKE(NULLIF(TRIM(t.USER_ID),''),'^[0-9]+$'),TRUE,FALSE) AS is_logged_in,
+        s.session_id
+    FROM SEGMENT_EVENTS.RACING_POST_JANUS_ANDROID_LIVE.TRACKS t
+    LEFT JOIN android_sessions s ON s.device_key=COALESCE(NULLIF(TRIM(t.USER_ID),''),t.CONTEXT_DEVICE_ID) AND s.ORIGINAL_TIMESTAMP=t.ORIGINAL_TIMESTAMP
+    WHERE t.ORIGINAL_TIMESTAMP::DATE BETWEEN (SELECT start_date FROM params) AND (SELECT end_date FROM params)
+),
+web_total AS (
+    SELECT w.day_key AS day, w.month_key AS month, 'web' AS platform,
+        COALESCE(w.stitched_user_id_month, w.user_id_norm)              AS user_id_raw,
+        COALESCE(w.stitched_user_id_month, w.ANONYMOUS_ID)              AS person_key,
+        CASE WHEN w.stitched_user_id_month IS NOT NULL THEN w.stitched_user_id_month
+             WHEN w.user_id_norm IS NOT NULL           THEN w.user_id_norm
+             ELSE CONCAT('web:', w.ANONYMOUS_ID)
+        END                                                              AS monthly_key,
+        IFF(COALESCE(w.stitched_user_id_month, w.user_id_norm) IS NOT NULL, TRUE, FALSE) AS is_logged_in,
+        w.session_id
+    FROM web_pages_stitched w
+),
+total_base AS (
+    SELECT * FROM ios_total UNION ALL SELECT * FROM android_total UNION ALL SELECT * FROM web_total
+),
+
+-- ============================================================
+-- EDITORIAL BASE
+-- ============================================================
+ios_editorial AS (
+    SELECT DATE_TRUNC('day',a.ORIGINAL_TIMESTAMP) AS day, DATE_TRUNC('month',a.ORIGINAL_TIMESTAMP) AS month,
+        'app' AS platform, NULLIF(TRIM(a.USER_ID),'') AS user_id_raw,
+        COALESCE(NULLIF(TRIM(a.USER_ID),''),a.CONTEXT_DEVICE_ID) AS person_key,
+        CASE WHEN NULLIF(TRIM(a.USER_ID),'') IS NOT NULL THEN NULLIF(TRIM(a.USER_ID),'')
+             ELSE CONCAT('ios:',a.CONTEXT_DEVICE_ID) END AS monthly_key,
+        IFF(NULLIF(TRIM(a.USER_ID),'') IS NOT NULL AND LENGTH(NULLIF(TRIM(a.USER_ID),''))<=10
+            AND REGEXP_LIKE(NULLIF(TRIM(a.USER_ID),''),'^[0-9]+$'),TRUE,FALSE) AS is_logged_in,
+        COALESCE(dm.desk,'news') AS desk, a.PREMIUM_CONTENT AS premium_content, s.session_id
+    FROM SEGMENT_EVENTS.RACING_POST_JANUS_IOS_LIVE.SCREEN_ARTICLE a
+    LEFT JOIN app_desk_map dm ON dm.parent_taxonomy=a.PARENT_TAXONOMY
+    LEFT JOIN ios_sessions s ON s.device_key=COALESCE(NULLIF(TRIM(a.USER_ID),''),a.CONTEXT_DEVICE_ID) AND s.ORIGINAL_TIMESTAMP=a.ORIGINAL_TIMESTAMP
+    WHERE a.ORIGINAL_TIMESTAMP::DATE BETWEEN (SELECT start_date FROM params) AND (SELECT end_date FROM params)
+    AND a.PARENT_TAXONOMY IN (SELECT v FROM app_parent_tax_allowlist)
+),
+android_editorial AS (
+    SELECT DATE_TRUNC('day',a.ORIGINAL_TIMESTAMP) AS day, DATE_TRUNC('month',a.ORIGINAL_TIMESTAMP) AS month,
+        'app' AS platform, NULLIF(TRIM(a.USER_ID),'') AS user_id_raw,
+        COALESCE(NULLIF(TRIM(a.USER_ID),''),a.CONTEXT_DEVICE_ID) AS person_key,
+        CASE WHEN NULLIF(TRIM(a.USER_ID),'') IS NOT NULL THEN NULLIF(TRIM(a.USER_ID),'')
+             ELSE CONCAT('android:',a.CONTEXT_DEVICE_ID) END AS monthly_key,
+        IFF(NULLIF(TRIM(a.USER_ID),'') IS NOT NULL AND LENGTH(NULLIF(TRIM(a.USER_ID),''))<=10
+            AND REGEXP_LIKE(NULLIF(TRIM(a.USER_ID),''),'^[0-9]+$'),TRUE,FALSE) AS is_logged_in,
+        COALESCE(dm.desk,'news') AS desk, a.PREMIUM_CONTENT AS premium_content, s.session_id
+    FROM SEGMENT_EVENTS.RACING_POST_JANUS_ANDROID_LIVE.SCREEN_ARTICLE a
+    LEFT JOIN app_desk_map dm ON dm.parent_taxonomy=a.PARENT_TAXONOMY
+    LEFT JOIN android_sessions s ON s.device_key=COALESCE(NULLIF(TRIM(a.USER_ID),''),a.CONTEXT_DEVICE_ID) AND s.ORIGINAL_TIMESTAMP=a.ORIGINAL_TIMESTAMP
+    WHERE a.ORIGINAL_TIMESTAMP::DATE BETWEEN (SELECT start_date FROM params) AND (SELECT end_date FROM params)
+    AND a.PARENT_TAXONOMY IN (SELECT v FROM app_parent_tax_allowlist)
+),
+web_editorial AS (
+    SELECT w.day_key AS day, w.month_key AS month, 'web' AS platform,
+        COALESCE(w.stitched_user_id_month, w.user_id_norm)              AS user_id_raw,
+        COALESCE(w.stitched_user_id_month, w.ANONYMOUS_ID)              AS person_key,
+        CASE WHEN w.stitched_user_id_month IS NOT NULL THEN w.stitched_user_id_month
+             WHEN w.user_id_norm IS NOT NULL           THEN w.user_id_norm
+             ELSE CONCAT('web:', w.ANONYMOUS_ID)
+        END                                                              AS monthly_key,
+        IFF(COALESCE(w.stitched_user_id_month, w.user_id_norm) IS NOT NULL, TRUE, FALSE) AS is_logged_in,
+        CASE WHEN w.NAME IN (SELECT v FROM rp_recommends_name_allowlist) THEN 'rp_recommends'
+             WHEN w.PARENT_TAXONOMY = 'Premium content'                 THEN 'premium_features'
+             WHEN dm.desk IS NOT NULL                                    THEN dm.desk
+             WHEN w.SITE_SECTION IN (SELECT v FROM web_site_section_allowlist) THEN LOWER(w.SITE_SECTION)
+             ELSE 'news' END                                             AS desk,
+        w.PREMIUM_CONTENT AS premium_content, w.session_id
+    FROM web_pages_stitched w
+    LEFT JOIN web_desk_map dm ON dm.parent_taxonomy=w.PARENT_TAXONOMY
+    WHERE w.TIMESTAMP::DATE BETWEEN (SELECT start_date FROM params) AND (SELECT end_date FROM params)
+    AND (
+        w.NAME = 'Article'
+        OR w.NAME IN (SELECT v FROM rp_recommends_name_allowlist)
+    )
+    AND (
+        w.NAME IN (SELECT v FROM web_name_allowlist)
+        OR w.PARENT_TAXONOMY IN (SELECT v FROM web_parent_tax_allowlist)
+        OR w.SITE_SECTION IN (SELECT v FROM web_site_section_allowlist)
+    )
+),
+editorial_base AS (
+    SELECT * FROM ios_editorial UNION ALL SELECT * FROM android_editorial UNION ALL SELECT * FROM web_editorial
+),
+
+-- ============================================================
+-- BARRIER BASE
+-- ============================================================
+web_anon_to_user_month AS (
+    SELECT DISTINCT DATE_TRUNC('month', p.TIMESTAMP::TIMESTAMP_NTZ) AS month_key, p.ANONYMOUS_ID,
+        MAX(IFF(NULLIF(TRIM(p.USER_ID),'') IS NOT NULL AND LENGTH(NULLIF(TRIM(p.USER_ID),''))<=10
+            AND REGEXP_LIKE(NULLIF(TRIM(p.USER_ID),''),'^[0-9]+$'),NULLIF(TRIM(p.USER_ID),''),NULL))
+            OVER (PARTITION BY DATE_TRUNC('month', p.TIMESTAMP::TIMESTAMP_NTZ), p.ANONYMOUS_ID) AS stitched_user_id_month
+    FROM SEGMENT_EVENTS.RACING_POST_JANUS_WEB_LIVE.PAGES p
+    WHERE p.TIMESTAMP::DATE BETWEEN (SELECT start_date FROM params) AND (SELECT end_date FROM params)
+),
+web_barrier_from_articles_raw AS (
+    SELECT
+        w.TIMESTAMP::TIMESTAMP_NTZ                                  AS event_ts,
+        w.ANONYMOUS_ID,
+        w.day_key                                                   AS day,
+        w.month_key                                                 AS month,
+        'web'                                                       AS platform,
+        COALESCE(w.stitched_user_id_month, w.user_id_norm)          AS user_id_raw,
+        COALESCE(w.stitched_user_id_month, w.ANONYMOUS_ID)          AS person_key,
+        CASE WHEN w.stitched_user_id_month IS NOT NULL THEN w.stitched_user_id_month
+             WHEN w.user_id_norm IS NOT NULL           THEN w.user_id_norm
+             ELSE CONCAT('web:', w.ANONYMOUS_ID) END                AS monthly_key,
+        IFF(COALESCE(w.stitched_user_id_month, w.user_id_norm) IS NOT NULL, TRUE, FALSE) AS is_logged_in,
+        CASE WHEN w.NAME IN (SELECT v FROM rp_recommends_name_allowlist) THEN 'rp_recommends'
+             WHEN w.PARENT_TAXONOMY='Premium content'               THEN 'premium_features'
+             WHEN dm.desk IS NOT NULL                               THEN dm.desk
+             WHEN w.SITE_SECTION IN (SELECT v FROM web_site_section_allowlist) THEN LOWER(w.SITE_SECTION)
+             ELSE 'news' END                                        AS desk
+    FROM web_pages_stitched w
+    LEFT JOIN web_desk_map dm ON dm.parent_taxonomy=w.PARENT_TAXONOMY
+    WHERE w.TIMESTAMP::DATE BETWEEN (SELECT start_date FROM params) AND (SELECT end_date FROM params)
+    AND COALESCE(w.PAYWALL_BARRIER,FALSE)=TRUE
+    AND (w.NAME IN (SELECT v FROM web_name_allowlist) OR w.PARENT_TAXONOMY IN (SELECT v FROM web_parent_tax_allowlist) OR w.SITE_SECTION IN (SELECT v FROM web_site_section_allowlist))
+),
+web_barrier_from_table_raw AS (
+    SELECT
+        b.TIMESTAMP::TIMESTAMP_NTZ                                  AS event_ts,
+        b.ANONYMOUS_ID,
+        DATE_TRUNC('day',b.TIMESTAMP::TIMESTAMP_NTZ)                AS day,
+        DATE_TRUNC('month',b.TIMESTAMP::TIMESTAMP_NTZ)              AS month,
+        'web'                                                       AS platform,
+        COALESCE(m.stitched_user_id_month,NULLIF(TRIM(b.USER_ID),'')) AS user_id_raw,
+        COALESCE(m.stitched_user_id_month, b.ANONYMOUS_ID)          AS person_key,
+        CASE WHEN COALESCE(m.stitched_user_id_month,NULLIF(TRIM(b.USER_ID),'')) IS NOT NULL
+             THEN COALESCE(m.stitched_user_id_month,NULLIF(TRIM(b.USER_ID),''))
+             ELSE CONCAT('web:',b.ANONYMOUS_ID) END                 AS monthly_key,
+        IFF(COALESCE(m.stitched_user_id_month,NULLIF(TRIM(b.USER_ID),'')) IS NOT NULL,TRUE,FALSE) AS is_logged_in,
+        CASE WHEN b.SITE_SECTION='News'       THEN 'news'
+             WHEN b.SITE_SECTION='Bloodstock' THEN 'bloodstock'
+             WHEN b.SITE_SECTION='Tipping'    THEN 'tipping'
+             ELSE NULL END                                          AS desk
+    FROM SEGMENT_EVENTS.RACING_POST_JANUS_WEB_LIVE.BARRIER b
+    LEFT JOIN web_anon_to_user_month m ON m.month_key=DATE_TRUNC('month',b.TIMESTAMP::TIMESTAMP_NTZ) AND m.ANONYMOUS_ID=b.ANONYMOUS_ID
+    WHERE b.TIMESTAMP::DATE BETWEEN (SELECT start_date FROM params) AND (SELECT end_date FROM params)
+    AND b.SITE_SECTION IN ('News','Bloodstock','Tipping')
+),
+web_barrier_deduped AS (
+    SELECT DISTINCT ANONYMOUS_ID,
+        DATE_TRUNC('minute', event_ts)                              AS event_minute,
+        day, month, platform, user_id_raw, person_key, monthly_key, is_logged_in, desk
+    FROM (
+        SELECT event_ts,ANONYMOUS_ID,day,month,platform,user_id_raw,person_key,monthly_key,is_logged_in,desk FROM web_barrier_from_articles_raw
+        UNION ALL
+        SELECT event_ts,ANONYMOUS_ID,day,month,platform,user_id_raw,person_key,monthly_key,is_logged_in,desk FROM web_barrier_from_table_raw
+    )
+),
+web_barrier AS (
+    SELECT MD5(ANONYMOUS_ID||'|'||event_minute::VARCHAR||'|'||COALESCE(desk,'')) AS barrier_event_id,
+        day,month,platform,user_id_raw,person_key,monthly_key,is_logged_in,desk
+    FROM web_barrier_deduped
+),
+ios_barrier AS (
+    SELECT MD5(TO_VARCHAR(p.ORIGINAL_TIMESTAMP::TIMESTAMP_NTZ)||'|'||p.CONTEXT_DEVICE_ID||'|'||COALESCE(p.USER_ID::STRING,'')||'|ios_presentation') AS barrier_event_id,
+        DATE_TRUNC('day',p.ORIGINAL_TIMESTAMP) AS day, DATE_TRUNC('month',p.ORIGINAL_TIMESTAMP) AS month,
+        'app' AS platform, NULLIF(TRIM(p.USER_ID),'') AS user_id_raw,
+        COALESCE(NULLIF(TRIM(p.USER_ID),''),p.CONTEXT_DEVICE_ID) AS person_key,
+        CASE WHEN NULLIF(TRIM(p.USER_ID),'') IS NOT NULL THEN NULLIF(TRIM(p.USER_ID),'')
+             ELSE CONCAT('ios:',p.CONTEXT_DEVICE_ID) END AS monthly_key,
+        IFF(NULLIF(TRIM(p.USER_ID),'') IS NOT NULL AND LENGTH(NULLIF(TRIM(p.USER_ID),''))<=10
+            AND REGEXP_LIKE(NULLIF(TRIM(p.USER_ID),''),'^[0-9]+$'),TRUE,FALSE) AS is_logged_in,
+        CASE WHEN p.PLACEMENT_ID='premium_article'      THEN 'news'
+             WHEN p.PLACEMENT_ID='premium_tips_article' THEN 'tipping'
+             ELSE 'news' END AS desk
+    FROM SEGMENT_EVENTS.RACING_POST_JANUS_IOS_LIVE.PRESENTATION_VIEWED p
+   WHERE p.ORIGINAL_TIMESTAMP::DATE BETWEEN (SELECT start_date FROM params) AND (SELECT end_date FROM params)
+AND p.PLACEMENT_ID IN ('premium_article','premium_tips_article')
+AND COALESCE(p.DISPLAYED_PRESENTATION,'') NOT IN (
+    'WINBACK_PAYWALL',
+    '2026_NEW_Winback_Paywall',
+    'RETENTION_PAYWALL',
+    'ULTIMATE_UPGRADE_PAYWALL_TIPPING',
+    'ULTIMATE_UPGRADE_PAYWALL',
+    '2026_NEW_Tipping_to_Ultimate_Paywall',
+    '2026_NEW_Insights_to_Ultimate_Paywall'
+)
+),
+android_barrier AS (
+    SELECT MD5(TO_VARCHAR(p.ORIGINAL_TIMESTAMP::TIMESTAMP_NTZ)||'|'||p.CONTEXT_DEVICE_ID||'|'||COALESCE(p.USER_ID::STRING,'')||'|android_presentation') AS barrier_event_id,
+        DATE_TRUNC('day',p.ORIGINAL_TIMESTAMP) AS day, DATE_TRUNC('month',p.ORIGINAL_TIMESTAMP) AS month,
+        'app' AS platform, NULLIF(TRIM(p.USER_ID),'') AS user_id_raw,
+        COALESCE(NULLIF(TRIM(p.USER_ID),''),p.CONTEXT_DEVICE_ID) AS person_key,
+        CASE WHEN NULLIF(TRIM(p.USER_ID),'') IS NOT NULL THEN NULLIF(TRIM(p.USER_ID),'')
+             ELSE CONCAT('android:',p.CONTEXT_DEVICE_ID) END AS monthly_key,
+        IFF(NULLIF(TRIM(p.USER_ID),'') IS NOT NULL AND LENGTH(NULLIF(TRIM(p.USER_ID),''))<=10
+            AND REGEXP_LIKE(NULLIF(TRIM(p.USER_ID),''),'^[0-9]+$'),TRUE,FALSE) AS is_logged_in,
+        CASE WHEN p.PLACEMENT_ID='premium_article'      THEN 'news'
+             WHEN p.PLACEMENT_ID='premium_tips_article' THEN 'tipping'
+             ELSE 'news' END AS desk
+    FROM SEGMENT_EVENTS.RACING_POST_JANUS_ANDROID_LIVE.PRESENTATION_VIEWED p
+    WHERE p.ORIGINAL_TIMESTAMP::DATE BETWEEN (SELECT start_date FROM params) AND (SELECT end_date FROM params)
+AND p.PLACEMENT_ID IN ('premium_article','premium_tips_article')
+AND COALESCE(p.DISPLAYED_PRESENTATION,'') NOT IN (
+    'WINBACK_PAYWALL',
+    '2026_NEW_Winback_Paywall',
+    'RETENTION_PAYWALL',
+    'ULTIMATE_UPGRADE_PAYWALL_TIPPING',
+    'ULTIMATE_UPGRADE_PAYWALL',
+    '2026_NEW_Tipping_to_Ultimate_Paywall',
+    '2026_NEW_Insights_to_Ultimate_Paywall'
+)
+),
+barrier_base AS (
+    SELECT barrier_event_id,day,month,platform,user_id_raw,person_key,monthly_key,is_logged_in,desk FROM web_barrier
+    UNION ALL SELECT barrier_event_id,day,month,platform,user_id_raw,person_key,monthly_key,is_logged_in,desk FROM ios_barrier
+    UNION ALL SELECT barrier_event_id,day,month,platform,user_id_raw,person_key,monthly_key,is_logged_in,desk FROM android_barrier
+),
+
+-- ============================================================
+-- CLICKS — Web + App
+-- ============================================================
+web_clicks_raw AS (
+    SELECT DATE_TRUNC('day',ORIGINAL_TIMESTAMP::TIMESTAMP_NTZ) AS day, DATE_TRUNC('month',ORIGINAL_TIMESTAMP::TIMESTAMP_NTZ) AS month,
+        NULLIF(TRIM(USER_ID::STRING),'') AS user_id_raw, COALESCE(NULLIF(TRIM(USER_ID::STRING),''),ANONYMOUS_ID) AS person_key,
+        CASE WHEN NULLIF(TRIM(USER_ID::STRING),'') IS NOT NULL THEN NULLIF(TRIM(USER_ID::STRING),'') ELSE CONCAT('web:',ANONYMOUS_ID) END AS monthly_key,
+        'web' AS platform,
+        CASE WHEN CONTEXT_TRAITS_SITE_SECTION IN (SELECT v FROM web_site_section_allowlist) THEN LOWER(CONTEXT_TRAITS_SITE_SECTION)
+             WHEN CONTEXT_TRAITS_SITE_SECTION='News' THEN 'news' ELSE 'news' END AS desk
+    FROM SEGMENT_EVENTS.RACING_POST_JANUS_WEB_LIVE.BOOKMAKER_REGISTRATION_TAP
+    WHERE ORIGINAL_TIMESTAMP::DATE BETWEEN (SELECT start_date FROM params) AND (SELECT end_date FROM params)
+    AND CONTEXT_TRAITS_SITE_SECTION IN ('News','Bloodstock','Tipping','Free Bets','Offers')
+    UNION ALL
+    SELECT DATE_TRUNC('day',ORIGINAL_TIMESTAMP::TIMESTAMP_NTZ),DATE_TRUNC('month',ORIGINAL_TIMESTAMP::TIMESTAMP_NTZ),
+        NULLIF(TRIM(USER_ID::STRING),''),COALESCE(NULLIF(TRIM(USER_ID::STRING),''),ANONYMOUS_ID),
+        CASE WHEN NULLIF(TRIM(USER_ID::STRING),'') IS NOT NULL THEN NULLIF(TRIM(USER_ID::STRING),'') ELSE CONCAT('web:',ANONYMOUS_ID) END,
+        'web','rp_recommends'
+    FROM SEGMENT_EVENTS.RACING_POST_JANUS_WEB_LIVE.ALL_OFFERS_CLICK
+    WHERE ORIGINAL_TIMESTAMP::DATE BETWEEN (SELECT start_date FROM params) AND (SELECT end_date FROM params)
+    UNION ALL
+    SELECT DATE_TRUNC('day',ORIGINAL_TIMESTAMP::TIMESTAMP_NTZ),DATE_TRUNC('month',ORIGINAL_TIMESTAMP::TIMESTAMP_NTZ),
+        NULLIF(TRIM(USER_ID::STRING),''),COALESCE(NULLIF(TRIM(USER_ID::STRING),''),ANONYMOUS_ID),
+        CASE WHEN NULLIF(TRIM(USER_ID::STRING),'') IS NOT NULL THEN NULLIF(TRIM(USER_ID::STRING),'') ELSE CONCAT('web:',ANONYMOUS_ID) END,
+        'web','rp_recommends'
+    FROM SEGMENT_EVENTS.RACING_POST_JANUS_WEB_LIVE.FREE_BETS_TAP
+    WHERE ORIGINAL_TIMESTAMP::DATE BETWEEN (SELECT start_date FROM params) AND (SELECT end_date FROM params)
+    UNION ALL
+    SELECT DATE_TRUNC('day',ORIGINAL_TIMESTAMP::TIMESTAMP_NTZ),DATE_TRUNC('month',ORIGINAL_TIMESTAMP::TIMESTAMP_NTZ),
+        NULLIF(TRIM(USER_ID::STRING),''),COALESCE(NULLIF(TRIM(USER_ID::STRING),''),ANONYMOUS_ID),
+        CASE WHEN NULLIF(TRIM(USER_ID::STRING),'') IS NOT NULL THEN NULLIF(TRIM(USER_ID::STRING),'') ELSE CONCAT('web:',ANONYMOUS_ID) END,
+        'web','tc'
+    FROM SEGMENT_EVENTS.RACING_POST_JANUS_WEB_LIVE.TC_ARTICLE_CLICK
+    WHERE ORIGINAL_TIMESTAMP::DATE BETWEEN (SELECT start_date FROM params) AND (SELECT end_date FROM params)
+),
+app_clicks_raw AS (
+    SELECT DATE_TRUNC('day',ORIGINAL_TIMESTAMP::TIMESTAMP_NTZ) AS day, DATE_TRUNC('month',ORIGINAL_TIMESTAMP::TIMESTAMP_NTZ) AS month,
+        NULLIF(TRIM(USER_ID::STRING),'') AS user_id_raw, COALESCE(NULLIF(TRIM(USER_ID::STRING),''),CONTEXT_DEVICE_ID) AS person_key,
+        CASE WHEN NULLIF(TRIM(USER_ID::STRING),'') IS NOT NULL THEN NULLIF(TRIM(USER_ID::STRING),'') ELSE CONCAT('ios:',CONTEXT_DEVICE_ID) END AS monthly_key,
+        'app' AS platform,'news' AS desk
+    FROM SEGMENT_EVENTS.RACING_POST_JANUS_IOS_LIVE.BOOKMAKER_REGISTRATION_TAP
+    WHERE ORIGINAL_TIMESTAMP::DATE BETWEEN (SELECT start_date FROM params) AND (SELECT end_date FROM params)
+    UNION ALL
+    SELECT DATE_TRUNC('day',ORIGINAL_TIMESTAMP::TIMESTAMP_NTZ),DATE_TRUNC('month',ORIGINAL_TIMESTAMP::TIMESTAMP_NTZ),
+        NULLIF(TRIM(USER_ID::STRING),''),COALESCE(NULLIF(TRIM(USER_ID::STRING),''),CONTEXT_DEVICE_ID),
+        CASE WHEN NULLIF(TRIM(USER_ID::STRING),'') IS NOT NULL THEN NULLIF(TRIM(USER_ID::STRING),'') ELSE CONCAT('android:',CONTEXT_DEVICE_ID) END,
+        'app','news'
+    FROM SEGMENT_EVENTS.RACING_POST_JANUS_ANDROID_LIVE.BOOKMAKER_REGISTRATION_TAP
+    WHERE ORIGINAL_TIMESTAMP::DATE BETWEEN (SELECT start_date FROM params) AND (SELECT end_date FROM params)
+),
+all_clicks_raw AS (
+    SELECT * FROM web_clicks_raw UNION ALL SELECT * FROM app_clicks_raw
+),
+traffic_tc_and_recs_raw AS (
+    SELECT
+        DATE_TRUNC('day',ORIGINAL_TIMESTAMP::TIMESTAMP_NTZ)  AS day,
+        DATE_TRUNC('month',ORIGINAL_TIMESTAMP::TIMESTAMP_NTZ) AS month,
+        NULLIF(TRIM(USER_ID::STRING),'')                      AS user_id_raw,
+        COALESCE(NULLIF(TRIM(USER_ID::STRING),''),ANONYMOUS_ID) AS person_key,
+        CASE WHEN NULLIF(TRIM(USER_ID::STRING),'') IS NOT NULL
+             THEN NULLIF(TRIM(USER_ID::STRING),'')
+             ELSE CONCAT('web:',ANONYMOUS_ID) END             AS monthly_key,
+        'rp_recommends'  AS desk,
+        'web'            AS platform,
+        'tc'             AS traffic_source
+    FROM SEGMENT_EVENTS.RACING_POST_JANUS_WEB_LIVE.TC_ARTICLE_CLICK
+    WHERE ORIGINAL_TIMESTAMP::DATE BETWEEN (SELECT start_date FROM params) AND (SELECT end_date FROM params)
+    UNION ALL
+    SELECT day, month, user_id_raw, person_key, monthly_key,
+           desk, platform,
+           'rc' AS traffic_source
+    FROM editorial_base WHERE desk='rp_recommends'
+),
+
+-- ============================================================
+-- PERSONA RESOLUTION
+-- ============================================================
+distinct_monthly_keys AS (
+    SELECT DISTINCT month::DATE AS month_start, monthly_key FROM total_base
+    UNION SELECT DISTINCT month::DATE, monthly_key FROM editorial_base
+    UNION SELECT DISTINCT month::DATE, monthly_key FROM barrier_base
+    UNION SELECT DISTINCT month::DATE, monthly_key FROM all_clicks_raw
+    UNION SELECT DISTINCT month::DATE, monthly_key FROM traffic_tc_and_recs_raw
+),
+persona_candidates AS (
+    SELECT month_start, monthly_key, 'ios' AS src_platform, REPLACE(monthly_key,'ios:','') AS unified_id
+    FROM distinct_monthly_keys WHERE LEFT(monthly_key,4)='ios:'
+    UNION ALL SELECT month_start,monthly_key,'android',REPLACE(monthly_key,'android:','') FROM distinct_monthly_keys WHERE LEFT(monthly_key,8)='android:'
+    UNION ALL SELECT month_start,monthly_key,'web',REPLACE(monthly_key,'web:','') FROM distinct_monthly_keys WHERE LEFT(monthly_key,4)='web:'
+    UNION ALL SELECT month_start,monthly_key,'ios',monthly_key FROM distinct_monthly_keys WHERE REGEXP_LIKE(monthly_key,'^[0-9]+$')
+    UNION ALL SELECT month_start,monthly_key,'android',monthly_key FROM distinct_monthly_keys WHERE REGEXP_LIKE(monthly_key,'^[0-9]+$')
+    UNION ALL SELECT month_start,monthly_key,'web',monthly_key FROM distinct_monthly_keys WHERE REGEXP_LIKE(monthly_key,'^[0-9]+$')
+),
+persona_monthly_latest AS (
+    SELECT x.month_start, x.monthly_key,
+        IFF(COALESCE(x.persona,'Unclassified') IN ('Bots',''),'Unclassified',COALESCE(x.persona,'Unclassified')) AS persona
+    FROM (
+        SELECT pc.month_start,pc.monthly_key,pm.persona,pm.persona_date,
+            ROW_NUMBER() OVER (PARTITION BY pc.month_start,pc.monthly_key ORDER BY pm.persona_date DESC NULLS LAST) AS rn
+        FROM persona_candidates pc
+        LEFT JOIN persona_map pm ON pm.month_start=pc.month_start AND pm.src_platform=pc.src_platform AND pm.unified_id=pc.unified_id
+    ) x WHERE x.rn=1
+),
+
+-- ============================================================
+-- ENRICHED LAYERS
+-- ============================================================
+total_enriched AS (
+    SELECT b.*, COALESCE(pml.persona,'Unclassified') AS persona
+    FROM total_base b
+    LEFT JOIN persona_monthly_latest pml ON pml.month_start=b.month::DATE AND pml.monthly_key=b.monthly_key
+),
+editorial_enriched AS (
+    SELECT b.*, COALESCE(pml.persona,'Unclassified') AS persona
+    FROM editorial_base b
+    LEFT JOIN persona_monthly_latest pml ON pml.month_start=b.month::DATE AND pml.monthly_key=b.monthly_key
+),
+barrier_enriched AS (
+    SELECT b.*, COALESCE(pml.persona,'Unclassified') AS persona
+    FROM barrier_base b
+    LEFT JOIN persona_monthly_latest pml ON pml.month_start=b.month::DATE AND pml.monthly_key=b.monthly_key
+),
+all_clicks_enriched AS (
+    SELECT c.*, COALESCE(pml.persona,'Unclassified') AS persona
+    FROM all_clicks_raw c
+    LEFT JOIN persona_monthly_latest pml ON pml.month_start=c.month::DATE AND pml.monthly_key=c.monthly_key
+),
+traffic_tc_recs_enriched AS (
+    SELECT t.*, COALESCE(pml.persona,'Unclassified') AS persona
+    FROM traffic_tc_and_recs_raw t
+    LEFT JOIN persona_monthly_latest pml
+        ON pml.month_start=t.month::DATE AND pml.monthly_key=t.monthly_key
+),
+
+-- ============================================================
+-- FTDs
+-- ============================================================
+ftd_source_rows AS (
+    SELECT
+        a.DATE::DATE                                                    AS period_start,
+        DATE_TRUNC('month', a.DATE)::DATE                               AS month_start,
+        CASE
+            WHEN UPPER(TRIM(b."Category 1")) IN ('WEB','MOBILE WEB')   THEN 'web'
+            WHEN UPPER(TRIM(b."Category 1")) = 'APP'                   THEN 'app'
+            ELSE 'total'
+        END                                                             AS platform,
+        CASE
+            WHEN TRIM(b."Category 2") = 'Transactional Content'        THEN 'rp_recommends'
+            WHEN TRIM(b."Category 3") IN (
+                'RP Recommends','RP Recommends EG',
+                'RP Reccommends','RP Reccommends EG'
+            )                                                           THEN 'rp_recommends'
+            WHEN TRIM(b."Category 2") = 'Content'                      THEN 'news'
+            ELSE 'other'
+        END                                                             AS desk,
+        TRIM(b."Category 2")                                            AS channel,
+        TRIM(b."Category 3")                                            AS source,
+        SUM(a.NEW_DEPOSITORS)                                           AS ftd
+    FROM SSG_EXTRA.TBL_FTD_ACCOUNTS_MASTER a
+    JOIN REPORTING.SSG_EXTRA.TBL_STAGING_FTD_ACCOUNTS_ALL_LINKS b
+      ON a.LINK_ID = b.LINKS AND a.BOOKMAKER = b."Bookmaker"
+    WHERE a.DATE BETWEEN (SELECT start_date FROM params) AND (SELECT end_date FROM params)
+    GROUP BY 1,2,3,4,5,6
+),
+ftd_source_rows_classified AS (
+    SELECT period_start, month_start, platform, desk, channel, source, ftd,
+        IFF(channel IN ('Content','Transactional Content'),TRUE,FALSE)  AS is_editorial,
+        IFF(channel='Transactional Content',TRUE,FALSE)                 AS is_tc,
+        IFF(channel='Transactional Content',TRUE,FALSE)                 AS is_recs
+    FROM ftd_source_rows
+),
+ftd_dominant_source_by_platform_desk_month AS (
+    SELECT
+        month_start  AS period_start,
+        'month'      AS grain,
+        platform,
+        desk,
+        source,
+        SUM(ftd)     AS ftd_for_source
+    FROM ftd_source_rows_classified
+    WHERE is_editorial
+    GROUP BY 1,2,3,4,5
+    QUALIFY ROW_NUMBER() OVER (
+        PARTITION BY month_start, platform, desk
+        ORDER BY SUM(ftd) DESC NULLS LAST
+    ) = 1
+),
+ftd_dominant_source_by_platform_desk_day AS (
+    SELECT
+        period_start,
+        'day'        AS grain,
+        platform,
+        desk,
+        source,
+        SUM(ftd)     AS ftd_for_source
+    FROM ftd_source_rows_classified
+    WHERE is_editorial
+    GROUP BY 1,2,3,4,5
+    QUALIFY ROW_NUMBER() OVER (
+        PARTITION BY period_start, platform, desk
+        ORDER BY SUM(ftd) DESC NULLS LAST
+    ) = 1
+),
+
+-- *** Single lookup CTE — replaces ftd_dominant_source_all entirely ***
+ftd_source_lookup AS (
+    SELECT 'month' AS grain, period_start, platform, desk, source AS ftd_source
+    FROM ftd_dominant_source_by_platform_desk_month
+    UNION ALL
+    SELECT 'day'   AS grain, period_start, platform, desk, source AS ftd_source
+    FROM ftd_dominant_source_by_platform_desk_day
+),
+
+ftd_month_by_platform_desk AS (
+    SELECT
+        month_start    AS period_start,
+        'month'        AS grain,
+        platform,
+        'Unclassified' AS persona,
+        desk,
+        -- NO source here — source is looked up separately via ftd_source_lookup
+        SUM(IFF(is_editorial, ftd, 0))::NUMBER(18,0) AS total_ftds_from_editorial,
+        SUM(IFF(is_tc,        ftd, 0))::NUMBER(18,0) AS total_ftds_from_tc,
+        SUM(IFF(is_recs,      ftd, 0))::NUMBER(18,0) AS total_ftds_from_recs
+    FROM ftd_source_rows_classified
+    WHERE is_editorial
+    GROUP BY 1, 2, 3, 4, 5
+),
+ftd_month_all_editorial_by_platform AS (
+    SELECT period_start, grain, platform, persona,
+        'All Editorial'                             AS desk,
+        SUM(total_ftds_from_editorial)::NUMBER(18,0) AS total_ftds_from_editorial,
+        SUM(total_ftds_from_tc)::NUMBER(18,0)        AS total_ftds_from_tc,
+        SUM(total_ftds_from_recs)::NUMBER(18,0)      AS total_ftds_from_recs
+    FROM ftd_month_by_platform_desk GROUP BY 1,2,3,4
+),
+ftd_month_total_by_desk AS (
+    SELECT period_start, grain,
+        'total' AS platform, persona, desk,
+        SUM(total_ftds_from_editorial)::NUMBER(18,0) AS total_ftds_from_editorial,
+        SUM(total_ftds_from_tc)::NUMBER(18,0)        AS total_ftds_from_tc,
+        SUM(total_ftds_from_recs)::NUMBER(18,0)      AS total_ftds_from_recs
+    FROM ftd_month_by_platform_desk GROUP BY 1,2,4,5
+),
+ftd_month_total_all_editorial AS (
+    SELECT period_start, grain,
+        'total'         AS platform, persona,
+        'All Editorial' AS desk,
+        SUM(total_ftds_from_editorial)::NUMBER(18,0) AS total_ftds_from_editorial,
+        SUM(total_ftds_from_tc)::NUMBER(18,0)        AS total_ftds_from_tc,
+        SUM(total_ftds_from_recs)::NUMBER(18,0)      AS total_ftds_from_recs
+    FROM ftd_month_by_platform_desk GROUP BY 1,2,4
+),
+ftd_day_by_platform_desk AS (
+    SELECT
+        period_start,
+        'day'          AS grain,
+        platform,
+        'Unclassified' AS persona,
+        desk,
+        SUM(IFF(is_editorial, ftd, 0))::NUMBER(18,0) AS total_ftds_from_editorial,
+        0::NUMBER(18,0)                              AS total_ftds_from_tc,
+        0::NUMBER(18,0)                              AS total_ftds_from_recs
+    FROM ftd_source_rows_classified
+    WHERE is_editorial
+    GROUP BY 1, 2, 3, 4, 5
+),
+ftd_day_all_editorial_by_platform AS (
+    SELECT period_start, grain, platform, persona,
+        'All Editorial' AS desk,
+        SUM(total_ftds_from_editorial)::NUMBER(18,0) AS total_ftds_from_editorial,
+        0::NUMBER(18,0) AS total_ftds_from_tc,
+        0::NUMBER(18,0) AS total_ftds_from_recs
+    FROM ftd_day_by_platform_desk GROUP BY 1,2,3,4
+),
+ftd_day_total_by_desk AS (
+    SELECT period_start, grain,
+        'total' AS platform, persona, desk,
+        SUM(total_ftds_from_editorial)::NUMBER(18,0) AS total_ftds_from_editorial,
+        0::NUMBER(18,0) AS total_ftds_from_tc,
+        0::NUMBER(18,0) AS total_ftds_from_recs
+    FROM ftd_day_by_platform_desk GROUP BY 1,2,4,5
+),
+ftd_day_total_all_editorial AS (
+    SELECT period_start, grain,
+        'total'         AS platform, persona,
+        'All Editorial' AS desk,
+        SUM(total_ftds_from_editorial)::NUMBER(18,0) AS total_ftds_from_editorial,
+        0::NUMBER(18,0) AS total_ftds_from_tc,
+        0::NUMBER(18,0) AS total_ftds_from_recs
+    FROM ftd_day_by_platform_desk GROUP BY 1,2,4
+),
+ftd_all AS (
+    SELECT period_start,grain,platform,persona,desk,
+        total_ftds_from_editorial, total_ftds_from_tc, total_ftds_from_recs,
+        (total_ftds_from_tc + total_ftds_from_recs)::NUMBER(18,0) AS total_ftds_from_tc_and_recs,
+        GREATEST(total_ftds_from_editorial-(total_ftds_from_tc+total_ftds_from_recs),0)::NUMBER(18,0) AS total_ftds_from_editorial_plus
+    FROM ftd_month_by_platform_desk
+    UNION ALL SELECT period_start,grain,platform,persona,desk,
+        total_ftds_from_editorial, total_ftds_from_tc, total_ftds_from_recs,
+        (total_ftds_from_tc+total_ftds_from_recs),
+        GREATEST(total_ftds_from_editorial-(total_ftds_from_tc+total_ftds_from_recs),0)
+    FROM ftd_month_all_editorial_by_platform
+    UNION ALL SELECT period_start,grain,platform,persona,desk,
+        total_ftds_from_editorial, total_ftds_from_tc, total_ftds_from_recs,
+        (total_ftds_from_tc+total_ftds_from_recs),
+        GREATEST(total_ftds_from_editorial-(total_ftds_from_tc+total_ftds_from_recs),0)
+    FROM ftd_month_total_by_desk
+    UNION ALL SELECT period_start,grain,platform,persona,desk,
+        total_ftds_from_editorial, total_ftds_from_tc, total_ftds_from_recs,
+        (total_ftds_from_tc+total_ftds_from_recs),
+        GREATEST(total_ftds_from_editorial-(total_ftds_from_tc+total_ftds_from_recs),0)
+    FROM ftd_month_total_all_editorial
+    UNION ALL SELECT period_start,grain,platform,persona,desk,
+        total_ftds_from_editorial, total_ftds_from_tc, total_ftds_from_recs,
+        (total_ftds_from_tc+total_ftds_from_recs),
+        GREATEST(total_ftds_from_editorial-(total_ftds_from_tc+total_ftds_from_recs),0)
+    FROM ftd_day_by_platform_desk
+    UNION ALL SELECT period_start,grain,platform,persona,desk,
+        total_ftds_from_editorial, total_ftds_from_tc, total_ftds_from_recs,
+        (total_ftds_from_tc+total_ftds_from_recs),
+        GREATEST(total_ftds_from_editorial-(total_ftds_from_tc+total_ftds_from_recs),0)
+    FROM ftd_day_all_editorial_by_platform
+    UNION ALL SELECT period_start,grain,platform,persona,desk,
+        total_ftds_from_editorial, total_ftds_from_tc, total_ftds_from_recs,
+        (total_ftds_from_tc+total_ftds_from_recs),
+        GREATEST(total_ftds_from_editorial-(total_ftds_from_tc+total_ftds_from_recs),0)
+    FROM ftd_day_total_by_desk
+    UNION ALL SELECT period_start,grain,platform,persona,desk,
+        total_ftds_from_editorial, total_ftds_from_tc, total_ftds_from_recs,
+        (total_ftds_from_tc+total_ftds_from_recs),
+        GREATEST(total_ftds_from_editorial-(total_ftds_from_tc+total_ftds_from_recs),0)
+    FROM ftd_day_total_all_editorial
+),
+ftd_source_json AS (
+    SELECT month_start AS period_start,'month' AS grain,platform,'Unclassified' AS persona,'All Editorial' AS desk,
+        OBJECT_AGG(source,ftd_sum) AS ftds_by_source
+    FROM (
+        SELECT month_start,platform,source,SUM(ftd)::NUMBER(18,0) AS ftd_sum
+        FROM ftd_source_rows_classified WHERE is_editorial GROUP BY 1,2,3
+    ) s GROUP BY 1,2,3,4,5
+),
+
+-- ============================================================
+-- CLICKS + TRAFFIC
+-- ============================================================
+clicks_by_desk AS (
+    SELECT 'day' AS grain,day::DATE AS period_start,platform,persona,desk,COUNT(*)::NUMBER(18,0) AS total_clicks_from_editorial FROM all_clicks_enriched GROUP BY 1,2,3,4,5
+    UNION ALL SELECT 'day',day::DATE,'total',persona,desk,COUNT(*)::NUMBER(18,0) FROM all_clicks_enriched GROUP BY 1,2,4,5
+    UNION ALL SELECT 'month',month::DATE,platform,persona,desk,COUNT(*)::NUMBER(18,0) FROM all_clicks_enriched GROUP BY 1,2,3,4,5
+    UNION ALL SELECT 'month',month::DATE,'total',persona,desk,COUNT(*)::NUMBER(18,0) FROM all_clicks_enriched GROUP BY 1,2,4,5
+),
+clicks_all_editorial AS (
+    SELECT grain,period_start,platform,persona,'All Editorial' AS desk,
+        SUM(total_clicks_from_editorial)::NUMBER(18,0) AS total_clicks_from_editorial
+    FROM clicks_by_desk GROUP BY 1,2,3,4
+),
+clicks_all AS (SELECT * FROM clicks_by_desk UNION ALL SELECT * FROM clicks_all_editorial),
+traffic_by_desk AS (
+    SELECT 'day' AS grain, day::DATE AS period_start, platform, persona, desk,
+        COUNT(*)::NUMBER(18,0)                                     AS traffic_events_to_tc_and_recs,
+        COUNT(IFF(traffic_source='tc',1,NULL))::NUMBER(18,0)       AS tc_traffic_events,
+        COUNT(IFF(traffic_source='rc',1,NULL))::NUMBER(18,0)       AS rc_traffic_events
+    FROM traffic_tc_recs_enriched GROUP BY 1,2,3,4,5
+    UNION ALL
+    SELECT 'day', day::DATE, 'total', persona, desk,
+        COUNT(*), COUNT(IFF(traffic_source='tc',1,NULL)), COUNT(IFF(traffic_source='rc',1,NULL))
+    FROM traffic_tc_recs_enriched GROUP BY 1,2,4,5
+    UNION ALL
+    SELECT 'month', month::DATE, platform, persona, desk,
+        COUNT(*), COUNT(IFF(traffic_source='tc',1,NULL)), COUNT(IFF(traffic_source='rc',1,NULL))
+    FROM traffic_tc_recs_enriched GROUP BY 1,2,3,4,5
+    UNION ALL
+    SELECT 'month', month::DATE, 'total', persona, desk,
+        COUNT(*), COUNT(IFF(traffic_source='tc',1,NULL)), COUNT(IFF(traffic_source='rc',1,NULL))
+    FROM traffic_tc_recs_enriched GROUP BY 1,2,4,5
+),
+traffic_all_editorial AS (
+    SELECT grain, period_start, platform, persona, 'All Editorial' AS desk,
+        SUM(traffic_events_to_tc_and_recs)::NUMBER(18,0) AS traffic_events_to_tc_and_recs,
+        SUM(tc_traffic_events)::NUMBER(18,0)             AS tc_traffic_events,
+        SUM(rc_traffic_events)::NUMBER(18,0)             AS rc_traffic_events
+    FROM traffic_by_desk GROUP BY 1,2,3,4
+),
+traffic_all AS (SELECT * FROM traffic_by_desk UNION ALL SELECT * FROM traffic_all_editorial),
+traffic_visitors_by_desk AS (
+    SELECT 'day' AS grain,day::DATE AS period_start,platform,persona,desk,
+        COUNT(DISTINCT IFF(NULLIF(TRIM(user_id_raw),'') IS NOT NULL,user_id_raw,CONCAT(platform,':',person_key)))::NUMBER(18,0) AS traffic_visitors_to_tc_and_recs
+    FROM traffic_tc_recs_enriched GROUP BY 1,2,3,4,5
+    UNION ALL SELECT 'day',day::DATE,'total',persona,desk,
+        COUNT(DISTINCT IFF(NULLIF(TRIM(user_id_raw),'') IS NOT NULL,user_id_raw,CONCAT(platform,':',person_key)))::NUMBER(18,0)
+    FROM traffic_tc_recs_enriched GROUP BY 1,2,4,5
+    UNION ALL SELECT 'month',month::DATE,platform,persona,desk,COUNT(DISTINCT monthly_key)::NUMBER(18,0) FROM traffic_tc_recs_enriched GROUP BY 1,2,3,4,5
+    UNION ALL SELECT 'month',month::DATE,'total',persona,desk,COUNT(DISTINCT monthly_key)::NUMBER(18,0) FROM traffic_tc_recs_enriched GROUP BY 1,2,4,5
+),
+traffic_visitors_all_editorial AS (
+    SELECT grain,period_start,platform,persona,'All Editorial' AS desk,
+        SUM(traffic_visitors_to_tc_and_recs)::NUMBER(18,0) AS traffic_visitors_to_tc_and_recs
+    FROM traffic_visitors_by_desk GROUP BY 1,2,3,4
+),
+traffic_visitors_all AS (SELECT * FROM traffic_visitors_by_desk UNION ALL SELECT * FROM traffic_visitors_all_editorial),
+
+-- ============================================================
+-- ROWS FOR METRICS
+-- ============================================================
+total_rows AS (
+    SELECT 'day' AS grain,e.day AS period_start,e.platform,e.persona,'All' AS desk,IFF(e.is_logged_in,e.user_id_raw,CONCAT(e.platform,':',e.person_key)) AS user_key,e.user_id_raw,e.is_logged_in,e.month,e.session_id FROM total_enriched e
+    UNION ALL SELECT 'day',e.day,'total',e.persona,'All',IFF(e.is_logged_in,e.user_id_raw,CONCAT(e.platform,':',e.person_key)),e.user_id_raw,e.is_logged_in,e.month,e.session_id FROM total_enriched e
+    UNION ALL SELECT 'month',e.month,e.platform,e.persona,'All',e.monthly_key,e.user_id_raw,e.is_logged_in,e.month,e.session_id FROM total_enriched e
+    UNION ALL SELECT 'month',e.month,'total',e.persona,'All',e.monthly_key,e.user_id_raw,e.is_logged_in,e.month,e.session_id FROM total_enriched e
+),
+editorial_rows AS (
+    SELECT 'day' AS grain,e.day AS period_start,e.platform,e.persona,e.desk,IFF(e.is_logged_in,e.user_id_raw,CONCAT(e.platform,':',e.person_key)) AS user_key,e.user_id_raw,e.is_logged_in,e.month,e.premium_content,e.session_id FROM editorial_enriched e
+    UNION ALL SELECT 'day',e.day,'total',e.persona,e.desk,IFF(e.is_logged_in,e.user_id_raw,CONCAT(e.platform,':',e.person_key)),e.user_id_raw,e.is_logged_in,e.month,e.premium_content,e.session_id FROM editorial_enriched e
+    UNION ALL SELECT 'month',e.month,e.platform,e.persona,e.desk,e.monthly_key,e.user_id_raw,e.is_logged_in,e.month,e.premium_content,e.session_id FROM editorial_enriched e
+    UNION ALL SELECT 'month',e.month,'total',e.persona,e.desk,e.monthly_key,e.user_id_raw,e.is_logged_in,e.month,e.premium_content,e.session_id FROM editorial_enriched e
+),
+editorial_rows_all_editorial AS (
+    SELECT grain,period_start,platform,persona,'All Editorial' AS desk,user_key,user_id_raw,is_logged_in,month,premium_content,session_id FROM editorial_rows
+),
+barrier_rows AS (
+    SELECT barrier_event_id,'day' AS grain,day AS period_start,platform,persona,desk,IFF(is_logged_in,user_id_raw,CONCAT(platform,':',person_key)) AS user_key,user_id_raw,is_logged_in,month FROM barrier_enriched
+    UNION ALL SELECT barrier_event_id,'day',day,'total',persona,desk,IFF(is_logged_in,user_id_raw,CONCAT(platform,':',person_key)),user_id_raw,is_logged_in,month FROM barrier_enriched
+    UNION ALL SELECT barrier_event_id,'month',month,platform,persona,desk,monthly_key,user_id_raw,is_logged_in,month FROM barrier_enriched
+    UNION ALL SELECT barrier_event_id,'month',month,'total',persona,desk,monthly_key,user_id_raw,is_logged_in,month FROM barrier_enriched
+),
+barrier_rows_all_editorial AS (
+    SELECT barrier_event_id,grain,period_start,platform,persona,'All Editorial' AS desk,user_key,user_id_raw,is_logged_in,month FROM barrier_rows
+),
+
+-- ============================================================
+-- BARRIER METRICS
+-- ============================================================
+barrier_metrics_by_desk AS (
+    SELECT r.grain,r.period_start::DATE AS period_start,r.platform,r.persona,r.desk,
+        COUNT(DISTINCT r.user_key)::NUMBER(18,0) AS users_barrier,COUNT(*)::NUMBER(18,0) AS barrier_events
+    FROM barrier_rows r
+    LEFT JOIN subscriber_flag sf ON sf.month_start=r.month::DATE AND sf.user_id=r.user_id_raw
+    WHERE NOT (r.is_logged_in AND sf.user_id IS NOT NULL) GROUP BY 1,2,3,4,5
+),
+barrier_metrics_all_editorial AS (
+    SELECT r.grain,r.period_start::DATE AS period_start,r.platform,r.persona,r.desk,
+        COUNT(DISTINCT r.user_key)::NUMBER(18,0) AS users_barrier,COUNT(*)::NUMBER(18,0) AS barrier_events
+    FROM barrier_rows_all_editorial r
+    LEFT JOIN subscriber_flag sf ON sf.month_start=r.month::DATE AND sf.user_id=r.user_id_raw
+    WHERE NOT (r.is_logged_in AND sf.user_id IS NOT NULL) GROUP BY 1,2,3,4,5
+),
+
+-- ============================================================
+-- MAIN METRICS
+-- ============================================================
+total_metrics AS (
+    SELECT r.grain,r.period_start::DATE AS period_start,r.platform,r.persona,r.desk,
+        COUNT(DISTINCT r.user_key)::NUMBER(18,0) AS users,COUNT(*)::NUMBER(18,0) AS events,
+        COUNT(DISTINCT IFF(r.is_logged_in,r.user_id_raw,NULL))::NUMBER(18,0) AS users_logged_in,
+        COUNT(IFF(r.is_logged_in,1,NULL))::NUMBER(18,0) AS events_logged_in,
+        COUNT(DISTINCT IFF(r.is_logged_in AND sf.user_id IS NOT NULL,r.user_id_raw,NULL))::NUMBER(18,0) AS users_subscriber,
+        COUNT(IFF(r.is_logged_in AND sf.user_id IS NOT NULL,1,NULL))::NUMBER(18,0) AS events_subscriber,
+        NULL::NUMBER(18,0) AS users_free,NULL::NUMBER(18,0) AS events_free,
+        NULL::NUMBER(18,0) AS users_premium,NULL::NUMBER(18,0) AS events_premium,
+        NULL::NUMBER(18,0) AS users_barrier,0::NUMBER(18,0) AS barrier_events,
+        NULL::NUMBER(18,0) AS users_subscriber_ultimate,NULL::NUMBER(18,0) AS users_subscriber_tipping,
+        IFF(COUNT(DISTINCT IFF(r.is_logged_in AND sf.user_id IS NOT NULL,r.user_id_raw,NULL))>0,TRUE,FALSE) AS is_subscriber,
+        IFF(r.desk='All Editorial',COUNT(DISTINCT IFF(r.is_logged_in AND sf.user_id IS NOT NULL,r.user_id_raw,NULL))::NUMBER(18,0),NULL::NUMBER(18,0)) AS editorial_subscribers,
+        IFF(COUNT(DISTINCT IFF(r.is_logged_in AND sf.user_id IS NOT NULL,r.user_id_raw,NULL))>0,TRUE,FALSE) AS subscriber_flag,
+        COUNT(*)::NUMBER(18,0) AS pageviews,COUNT(DISTINCT r.session_id)::NUMBER(18,0) AS unique_sessions,
+        NULL::NUMBER(18,0) AS premium_editorial_users,NULL::NUMBER(18,0) AS free_editorial_users
+    FROM total_rows r LEFT JOIN subscriber_flag sf ON sf.month_start=r.month::DATE AND sf.user_id=r.user_id_raw
+    GROUP BY 1,2,3,4,5
+),
+editorial_metrics_by_desk AS (
+    SELECT
+        r.grain,
+        r.period_start::DATE                                                                                     AS period_start,
+        r.platform,
+        r.persona,
+        r.desk,
+        COUNT(DISTINCT r.user_key)::NUMBER(18,0)                                                                 AS users,
+        COUNT(*)::NUMBER(18,0)                                                                                   AS events,
+        COUNT(DISTINCT IFF(r.is_logged_in, r.user_id_raw, NULL))::NUMBER(18,0)                                  AS users_logged_in,
+        COUNT(IFF(r.is_logged_in, 1, NULL))::NUMBER(18,0)                                                       AS events_logged_in,
+        COUNT(DISTINCT IFF(r.is_logged_in AND sf.user_id IS NOT NULL,
+                           r.user_id_raw, NULL))::NUMBER(18,0)                                                   AS users_subscriber,
+        COUNT(IFF(r.is_logged_in AND sf.user_id IS NOT NULL,
+                  1, NULL))::NUMBER(18,0)                                                                        AS events_subscriber,
+        COUNT(DISTINCT IFF(COALESCE(r.premium_content, FALSE) = FALSE,
+                           r.user_key, NULL))::NUMBER(18,0)                                                      AS users_free,
+        COUNT(IFF(COALESCE(r.premium_content, FALSE) = FALSE,
+                  1, NULL))::NUMBER(18,0)                                                                        AS events_free,
+        COUNT(DISTINCT IFF(COALESCE(r.premium_content, FALSE) = TRUE
+                           AND r.is_logged_in AND sf.user_id IS NOT NULL,
+                           r.user_id_raw, NULL))::NUMBER(18,0)                                                   AS users_premium,
+        COUNT(IFF(COALESCE(r.premium_content, FALSE) = TRUE
+                  AND r.is_logged_in AND sf.user_id IS NOT NULL,
+                  1, NULL))::NUMBER(18,0)                                                                        AS events_premium,
+        COALESCE(bm.users_barrier,  0)::NUMBER(18,0)                                                            AS users_barrier,
+        COALESCE(bm.barrier_events, 0)::NUMBER(18,0)                                                            AS barrier_events,
+        COUNT(DISTINCT IFF(r.is_logged_in AND sf_ult.user_id IS NOT NULL,
+                           r.user_id_raw, NULL))::NUMBER(18,0)                                                   AS users_subscriber_ultimate,
+        COUNT(DISTINCT IFF(r.is_logged_in AND sf_tip.user_id IS NOT NULL,
+                           r.user_id_raw, NULL))::NUMBER(18,0)                                                   AS users_subscriber_tipping,
+        IFF(COUNT(DISTINCT IFF(r.is_logged_in AND sf.user_id IS NOT NULL,
+                               r.user_id_raw, NULL)) > 0,
+            TRUE, FALSE)                                                                                         AS is_subscriber,
+        IFF(r.desk = 'All Editorial',
+            COUNT(DISTINCT IFF(r.is_logged_in AND sf.user_id IS NOT NULL,
+                               r.user_id_raw, NULL))::NUMBER(18,0),
+            NULL::NUMBER(18,0))                                                                                  AS editorial_subscribers,
+        IFF(COUNT(DISTINCT IFF(r.is_logged_in AND sf.user_id IS NOT NULL,
+                               r.user_id_raw, NULL)) > 0,
+            TRUE, FALSE)                                                                                         AS subscriber_flag,
+        COUNT(*)::NUMBER(18,0)                                                                                   AS pageviews,
+        COUNT(DISTINCT r.session_id)::NUMBER(18,0)                                                              AS unique_sessions,
+        COUNT(DISTINCT IFF(COALESCE(r.premium_content, FALSE) = TRUE,
+                           r.user_key, NULL))::NUMBER(18,0)                                                      AS premium_editorial_users,
+        COUNT(DISTINCT IFF(COALESCE(r.premium_content, FALSE) = FALSE,
+                           r.user_key, NULL))::NUMBER(18,0)                                                      AS free_editorial_users
+    FROM editorial_rows r
+
+    -- subscriber_flag is already month-deduplicated → no fan-out risk
+    LEFT JOIN subscriber_flag sf
+        ON  sf.month_start = r.month::DATE
+        AND sf.user_id     = r.user_id_raw
+
+    -- *** FIX: grain-aware deduped join — exactly 1 row per (user, period) ***
+    LEFT JOIN subscriber_ultimate_deduped sf_ult
+        ON  sf_ult.user_id      = r.user_id_raw
+        AND sf_ult.grain        = r.grain
+        AND sf_ult.period_start = r.period_start::DATE
+
+    LEFT JOIN subscriber_tipping_deduped sf_tip
+        ON  sf_tip.user_id      = r.user_id_raw
+        AND sf_tip.grain        = r.grain
+        AND sf_tip.period_start = r.period_start::DATE
+
+    LEFT JOIN barrier_metrics_by_desk bm
+        ON  bm.grain        = r.grain
+        AND bm.period_start = r.period_start::DATE
+        AND bm.platform     = r.platform
+        AND bm.persona      = r.persona
+        AND bm.desk         = r.desk
+
+    GROUP BY 1, 2, 3, 4, 5, users_barrier, barrier_events
+),
+editorial_metrics_all_editorial AS (
+    SELECT r.grain,r.period_start::DATE AS period_start,r.platform,r.persona,r.desk,
+        COUNT(DISTINCT r.user_key)::NUMBER(18,0) AS users,COUNT(*)::NUMBER(18,0) AS events,
+        COUNT(DISTINCT IFF(r.is_logged_in,r.user_id_raw,NULL))::NUMBER(18,0) AS users_logged_in,
+        COUNT(IFF(r.is_logged_in,1,NULL))::NUMBER(18,0) AS events_logged_in,
+        COUNT(DISTINCT IFF(r.is_logged_in AND sf.user_id IS NOT NULL,r.user_id_raw,NULL))::NUMBER(18,0) AS users_subscriber,
+        COUNT(IFF(r.is_logged_in AND sf.user_id IS NOT NULL,1,NULL))::NUMBER(18,0) AS events_subscriber,
+        COUNT(DISTINCT IFF(COALESCE(r.premium_content,FALSE)=FALSE,r.user_key,NULL))::NUMBER(18,0) AS users_free,
+        COUNT(IFF(COALESCE(r.premium_content,FALSE)=FALSE,1,NULL))::NUMBER(18,0) AS events_free,
+        COUNT(DISTINCT IFF(COALESCE(r.premium_content,FALSE)=TRUE AND r.is_logged_in AND sf.user_id IS NOT NULL,r.user_id_raw,NULL))::NUMBER(18,0) AS users_premium,
+        COUNT(IFF(COALESCE(r.premium_content,FALSE)=TRUE AND r.is_logged_in AND sf.user_id IS NOT NULL,1,NULL))::NUMBER(18,0) AS events_premium,
+        COALESCE(bm.users_barrier,0)::NUMBER(18,0) AS users_barrier,
+        COALESCE(bm.barrier_events,0)::NUMBER(18,0) AS barrier_events,
+        COUNT(DISTINCT IFF(r.is_logged_in AND sf_ult.user_id IS NOT NULL,r.user_id_raw,NULL))::NUMBER(18,0) AS users_subscriber_ultimate,
+        COUNT(DISTINCT IFF(r.is_logged_in AND sf_tip.user_id IS NOT NULL,r.user_id_raw,NULL))::NUMBER(18,0) AS users_subscriber_tipping,
+        IFF(COUNT(DISTINCT IFF(r.is_logged_in AND sf.user_id IS NOT NULL,r.user_id_raw,NULL))>0,TRUE,FALSE) AS is_subscriber,
+        COUNT(DISTINCT IFF(r.is_logged_in AND sf.user_id IS NOT NULL,r.user_id_raw,NULL))::NUMBER(18,0) AS editorial_subscribers,
+        IFF(COUNT(DISTINCT IFF(r.is_logged_in AND sf.user_id IS NOT NULL,r.user_id_raw,NULL))>0,TRUE,FALSE) AS subscriber_flag,
+        COUNT(*)::NUMBER(18,0) AS pageviews,COUNT(DISTINCT r.session_id)::NUMBER(18,0) AS unique_sessions,
+        COUNT(DISTINCT IFF(COALESCE(r.premium_content,FALSE)=TRUE,r.user_key,NULL))::NUMBER(18,0) AS premium_editorial_users,
+        COUNT(DISTINCT IFF(COALESCE(r.premium_content,FALSE)=FALSE,r.user_key,NULL))::NUMBER(18,0) AS free_editorial_users
+    FROM editorial_rows_all_editorial r
+    LEFT JOIN subscriber_flag sf              ON sf.month_start=r.month::DATE AND sf.user_id=r.user_id_raw
+LEFT JOIN subscriber_ultimate_flag_month sf_ult
+    ON sf_ult.month_start = r.month::DATE AND sf_ult.user_id = r.user_id_raw
+LEFT JOIN subscriber_tipping_flag_month  sf_tip
+    ON sf_tip.month_start = r.month::DATE AND sf_tip.user_id = r.user_id_raw
+    
+    LEFT JOIN barrier_metrics_all_editorial bm ON bm.grain=r.grain AND bm.period_start=r.period_start::DATE AND bm.platform=r.platform AND bm.persona=r.persona AND bm.desk=r.desk
+    GROUP BY 1,2,3,4,5,users_barrier,barrier_events
+),
+
+-- ============================================================
+-- NET SUBSCRIBERS
+-- ============================================================
+all_metrics AS (
+    SELECT grain,period_start,platform,persona,desk,users_subscriber FROM total_metrics
+    UNION ALL SELECT grain,period_start,platform,persona,desk,users_subscriber FROM editorial_metrics_by_desk
+    UNION ALL SELECT grain,period_start,platform,persona,desk,users_subscriber FROM editorial_metrics_all_editorial
+),
+net_subscriber_calc AS (
+    SELECT grain,period_start,platform,persona,desk,
+        (users_subscriber-LAG(users_subscriber) OVER (PARTITION BY grain,platform,persona,desk ORDER BY period_start))::NUMBER(18,0) AS net_subscribers
+    FROM all_metrics
+),
+
+-- ============================================================
+-- ACTIVE DAYS
+-- ============================================================
+subscriber_active_days_base AS (
+    SELECT DISTINCT
+        e.month::DATE AS month_start, e.platform,
+        COALESCE(pml.persona,'Unclassified') AS persona,
+        e.desk, e.user_id_raw AS subscriber_id, e.day::DATE AS active_day
+    FROM editorial_enriched e
+    JOIN subscriber_flag sf ON sf.month_start=e.month::DATE AND sf.user_id=e.user_id_raw
+    LEFT JOIN persona_monthly_latest pml ON pml.month_start=e.month::DATE AND pml.monthly_key=e.monthly_key
+    WHERE e.user_id_raw IS NOT NULL
+),
+active_days_all AS (
+    SELECT 'month' AS grain, month_start AS period_start, platform, persona, desk,
+        COUNT(*)::NUMBER(18,0) AS total_active_days
+    FROM subscriber_active_days_base GROUP BY 2,3,4,5
+    UNION ALL
+    SELECT 'month', month_start, 'total', persona, desk, COUNT(*)::NUMBER(18,0)
+    FROM subscriber_active_days_base GROUP BY 2,4,5
+    UNION ALL
+    SELECT 'month', month_start, platform, persona, 'All Editorial',
+        COUNT(DISTINCT CONCAT(subscriber_id,'|',active_day::VARCHAR))::NUMBER(18,0)
+    FROM subscriber_active_days_base GROUP BY 2,3,4
+    UNION ALL
+    SELECT 'month', month_start, 'total', persona, 'All Editorial',
+        COUNT(DISTINCT CONCAT(subscriber_id,'|',active_day::VARCHAR))::NUMBER(18,0)
+    FROM subscriber_active_days_base GROUP BY 2,4
+    UNION ALL
+    SELECT 'day', active_day AS period_start, platform, persona, desk,
+        COUNT(DISTINCT subscriber_id)::NUMBER(18,0)
+    FROM subscriber_active_days_base GROUP BY 2,3,4,5
+    UNION ALL
+    SELECT 'day', active_day, 'total', persona, desk, COUNT(DISTINCT subscriber_id)::NUMBER(18,0)
+    FROM subscriber_active_days_base GROUP BY 2,4,5
+    UNION ALL
+    SELECT 'day', active_day, platform, persona, 'All Editorial', COUNT(DISTINCT subscriber_id)::NUMBER(18,0)
+    FROM subscriber_active_days_base GROUP BY 2,3,4
+    UNION ALL
+    SELECT 'day', active_day, 'total', persona, 'All Editorial', COUNT(DISTINCT subscriber_id)::NUMBER(18,0)
+    FROM subscriber_active_days_base GROUP BY 2,4
+),
+subscriber_ultimate_daily AS (
+    SELECT DISTINCT TRY_TO_DATE(a.DAYRANGECAPTURED) AS day_start,
+        DATE_TRUNC('month',TRY_TO_DATE(a.DAYRANGECAPTURED))::DATE AS month_start,
+        s.CLIENTUSERID::STRING AS user_id
+    FROM REPORTING.SSG_SUBSCRIPTIONS.ACTIVESUBSCRIPTIONS_DAILY a
+    JOIN REPORTING.SSG_SUBSCRIPTIONS.SUBSCRIPTION_DAILY_STAGING s ON s.ACCOUNTID=a.ACCOUNT_ID
+    WHERE TRY_TO_DATE(a.DAYRANGECAPTURED) BETWEEN (SELECT start_date FROM params) AND (SELECT end_date FROM params)
+    AND s.CLIENTUSERID IS NOT NULL AND s.SERVICETITLE LIKE 'Ultimate%'
+),
+subscriber_tipping_daily AS (
+    SELECT DISTINCT TRY_TO_DATE(a.DAYRANGECAPTURED) AS day_start,
+        DATE_TRUNC('month',TRY_TO_DATE(a.DAYRANGECAPTURED))::DATE AS month_start,
+        s.CLIENTUSERID::STRING AS user_id
+    FROM REPORTING.SSG_SUBSCRIPTIONS.ACTIVESUBSCRIPTIONS_DAILY a
+    JOIN REPORTING.SSG_SUBSCRIPTIONS.SUBSCRIPTION_DAILY_STAGING s ON s.ACCOUNTID=a.ACCOUNT_ID
+    WHERE TRY_TO_DATE(a.DAYRANGECAPTURED) BETWEEN (SELECT start_date FROM params) AND (SELECT end_date FROM params)
+    AND s.CLIENTUSERID IS NOT NULL AND a.SERVICETITLE LIKE '%Tipping%'
+),
+web_consume_daily AS (
+    SELECT DISTINCT DATE_TRUNC('day',p.TIMESTAMP::TIMESTAMP_NTZ)::DATE AS day_start,
+        DATE_TRUNC('month',p.TIMESTAMP::TIMESTAMP_NTZ)::DATE AS month_start,
+        'web' AS platform, NULLIF(TRIM(p.USER_ID),'') AS user_id
+    FROM SEGMENT_EVENTS.RACING_POST_JANUS_WEB_LIVE.PAGES p
+    WHERE p.TIMESTAMP::DATE BETWEEN (SELECT start_date FROM params) AND (SELECT end_date FROM params)
+    AND NULLIF(TRIM(p.USER_ID),'') IS NOT NULL AND LENGTH(NULLIF(TRIM(p.USER_ID),''))<=10
+    AND REGEXP_LIKE(NULLIF(TRIM(p.USER_ID),''),'^[0-9]+$')
+    -- *** Match base query: editorial articles only ***
+    AND p.NAME = 'Article'
+    AND p.PARENT_TAXONOMY IN ('News','Horse racing tips','Sport','Bloodstock')
+),
+ios_consume_daily AS (
+    SELECT DISTINCT DATE_TRUNC('day',a.ORIGINAL_TIMESTAMP::TIMESTAMP_NTZ)::DATE AS day_start,
+        DATE_TRUNC('month',a.ORIGINAL_TIMESTAMP::TIMESTAMP_NTZ)::DATE AS month_start,
+        'app' AS platform, NULLIF(TRIM(a.USER_ID),'') AS user_id
+    FROM SEGMENT_EVENTS.RACING_POST_JANUS_IOS_LIVE.SCREEN_ARTICLE a
+    WHERE a.ORIGINAL_TIMESTAMP::DATE BETWEEN (SELECT start_date FROM params) AND (SELECT end_date FROM params)
+    AND NULLIF(TRIM(a.USER_ID),'') IS NOT NULL AND LENGTH(NULLIF(TRIM(a.USER_ID),''))<=10
+    AND REGEXP_LIKE(NULLIF(TRIM(a.USER_ID),''),'^[0-9]+$')
+    -- *** Match base query: editorial taxonomies only ***
+    AND a.PARENT_TAXONOMY IN ('News','Horse racing tips','Sport','Bloodstock','Premium content')
+),
+android_consume_daily AS (
+    SELECT DISTINCT DATE_TRUNC('day',a.ORIGINAL_TIMESTAMP::TIMESTAMP_NTZ)::DATE AS day_start,
+        DATE_TRUNC('month',a.ORIGINAL_TIMESTAMP::TIMESTAMP_NTZ)::DATE AS month_start,
+        'app' AS platform, NULLIF(TRIM(a.USER_ID),'') AS user_id
+    FROM SEGMENT_EVENTS.RACING_POST_JANUS_ANDROID_LIVE.SCREEN_ARTICLE a
+    WHERE a.ORIGINAL_TIMESTAMP::DATE BETWEEN (SELECT start_date FROM params) AND (SELECT end_date FROM params)
+    AND NULLIF(TRIM(a.USER_ID),'') IS NOT NULL AND LENGTH(NULLIF(TRIM(a.USER_ID),''))<=10
+    AND REGEXP_LIKE(NULLIF(TRIM(a.USER_ID),''),'^[0-9]+$')
+    -- *** Match base query: editorial taxonomies only ***
+    AND a.PARENT_TAXONOMY IN ('News','Horse racing tips','Sport','Bloodstock','Premium content')
+),
+consume_daily AS (SELECT * FROM web_consume_daily UNION SELECT * FROM ios_consume_daily UNION SELECT * FROM android_consume_daily),
+platforms AS (SELECT 'web' AS platform UNION ALL SELECT 'app'),
+ult_den AS (SELECT d.day_start,d.month_start,p.platform,COUNT(DISTINCT d.user_id) AS denom FROM subscriber_ultimate_daily d CROSS JOIN platforms p GROUP BY 1,2,3),
+tip_den AS (SELECT d.day_start,d.month_start,p.platform,COUNT(DISTINCT d.user_id) AS denom FROM subscriber_tipping_daily d CROSS JOIN platforms p GROUP BY 1,2,3),
+ult_num AS (SELECT c.day_start,c.month_start,c.platform,COUNT(DISTINCT c.user_id) AS numer FROM consume_daily c JOIN subscriber_ultimate_daily u ON u.day_start=c.day_start AND u.user_id=c.user_id GROUP BY 1,2,3),
+tip_num AS (SELECT c.day_start,c.month_start,c.platform,COUNT(DISTINCT c.user_id) AS numer FROM consume_daily c JOIN subscriber_tipping_daily t ON t.day_start=c.day_start AND t.user_id=c.user_id GROUP BY 1,2,3),
+ult_day_pct AS (SELECT d.day_start,d.month_start,d.platform,(COALESCE(n.numer,0)::FLOAT/NULLIF(d.denom,0))*100 AS day_pct FROM ult_den d LEFT JOIN ult_num n ON n.day_start=d.day_start AND n.month_start=d.month_start AND n.platform=d.platform),
+tip_day_pct AS (SELECT d.day_start,d.month_start,d.platform,(COALESCE(n.numer,0)::FLOAT/NULLIF(d.denom,0))*100 AS day_pct FROM tip_den d LEFT JOIN tip_num n ON n.day_start=d.day_start AND n.month_start=d.month_start AND n.platform=d.platform),
+ultimate_month_daily_avg AS (SELECT month_start AS period_start,platform,ROUND(AVG(day_pct),2)::NUMBER(18,2) AS daily_avg_pct_ultimate_consuming_editorial FROM ult_day_pct GROUP BY 1,2),
+tipping_month_daily_avg AS (SELECT month_start AS period_start,platform,ROUND(AVG(day_pct),2)::NUMBER(18,2) AS daily_avg_pct_tipping_consuming_editorial FROM tip_day_pct GROUP BY 1,2),
+
+-- ============================================================
+-- EDITORIAL CLICKS (for EDITORIAL_CLICKS_BY_SOURCE)
+-- ============================================================
+web_anon_user_month_bridge AS (
+    SELECT DISTINCT DATE_TRUNC('month',TIMESTAMP::TIMESTAMP_NTZ)::DATE AS month_start,ANONYMOUS_ID,
+        MAX(IFF(NULLIF(TRIM(USER_ID),'') IS NOT NULL AND LENGTH(NULLIF(TRIM(USER_ID),''))<=10
+            AND REGEXP_LIKE(NULLIF(TRIM(USER_ID),''),'^[0-9]+$'),NULLIF(TRIM(USER_ID),''),NULL))
+            OVER (PARTITION BY DATE_TRUNC('month',TIMESTAMP::TIMESTAMP_NTZ),ANONYMOUS_ID) AS stitched_user_id_month
+    FROM SEGMENT_EVENTS.RACING_POST_JANUS_WEB_LIVE.PAGES
+    WHERE TIMESTAMP::DATE BETWEEN (SELECT start_date FROM params) AND (SELECT end_date FROM params)
+),
+editorial_clicks AS (
+    SELECT c.ORIGINAL_TIMESTAMP::TIMESTAMP_NTZ AS click_ts,
+        DATE_TRUNC('month',c.ORIGINAL_TIMESTAMP::TIMESTAMP_NTZ)::DATE AS period_start,
+        'web' AS platform,
+        CASE WHEN c.CONTEXT_TRAITS_SITE_SECTION IN ('Bloodstock','Tipping') THEN LOWER(c.CONTEXT_TRAITS_SITE_SECTION)
+             WHEN c.CONTEXT_TRAITS_SITE_SECTION='News' THEN 'news' ELSE 'news' END AS desk,
+        'BOOKMAKER_REGISTRATION_TAP_WEB' AS source,
+        COALESCE(NULLIF(TRIM(c.USER_ID::STRING),''),b.stitched_user_id_month) AS racingpost_id,
+        COALESCE(pml.persona,'Unclassified') AS persona
+    FROM SEGMENT_EVENTS.RACING_POST_JANUS_WEB_LIVE.BOOKMAKER_REGISTRATION_TAP c
+    LEFT JOIN web_anon_user_month_bridge b ON b.month_start=DATE_TRUNC('month',c.ORIGINAL_TIMESTAMP::TIMESTAMP_NTZ)::DATE AND b.ANONYMOUS_ID=c.ANONYMOUS_ID
+    LEFT JOIN persona_monthly_latest pml ON pml.month_start=DATE_TRUNC('month',c.ORIGINAL_TIMESTAMP::TIMESTAMP_NTZ)::DATE
+        AND pml.monthly_key=COALESCE(NULLIF(TRIM(c.USER_ID::STRING),''),b.stitched_user_id_month,CONCAT('web:',c.ANONYMOUS_ID))
+    WHERE c.ORIGINAL_TIMESTAMP::DATE BETWEEN (SELECT start_date FROM params) AND (SELECT end_date FROM params)
+    AND c.CONTEXT_TRAITS_SITE_SECTION IN ('News','Bloodstock','Tipping','Free Bets','Offers')
+    UNION ALL
+    SELECT c.ORIGINAL_TIMESTAMP::TIMESTAMP_NTZ,DATE_TRUNC('month',c.ORIGINAL_TIMESTAMP::TIMESTAMP_NTZ)::DATE,
+        'web','rp_recommends','TC_ARTICLE_CLICK',NULLIF(TRIM(c.USER_ID::STRING),''),COALESCE(pml.persona,'Unclassified')
+    FROM SEGMENT_EVENTS.RACING_POST_JANUS_WEB_LIVE.TC_ARTICLE_CLICK c
+    LEFT JOIN persona_monthly_latest pml ON pml.month_start=DATE_TRUNC('month',c.ORIGINAL_TIMESTAMP::TIMESTAMP_NTZ)::DATE
+        AND pml.monthly_key=COALESCE(NULLIF(TRIM(c.USER_ID::STRING),''),CONCAT('web:',c.ANONYMOUS_ID))
+    WHERE c.ORIGINAL_TIMESTAMP::DATE BETWEEN (SELECT start_date FROM params) AND (SELECT end_date FROM params)
+    UNION ALL
+    SELECT c.ORIGINAL_TIMESTAMP::TIMESTAMP_NTZ,DATE_TRUNC('month',c.ORIGINAL_TIMESTAMP::TIMESTAMP_NTZ)::DATE,
+        'web','rp_recommends','ALL_OFFERS_CLICK',NULLIF(TRIM(c.USER_ID::STRING),''),COALESCE(pml.persona,'Unclassified')
+    FROM SEGMENT_EVENTS.RACING_POST_JANUS_WEB_LIVE.ALL_OFFERS_CLICK c
+    LEFT JOIN persona_monthly_latest pml ON pml.month_start=DATE_TRUNC('month',c.ORIGINAL_TIMESTAMP::TIMESTAMP_NTZ)::DATE
+        AND pml.monthly_key=COALESCE(NULLIF(TRIM(c.USER_ID::STRING),''),CONCAT('web:',c.ANONYMOUS_ID))
+    WHERE c.ORIGINAL_TIMESTAMP::DATE BETWEEN (SELECT start_date FROM params) AND (SELECT end_date FROM params)
+    UNION ALL
+    SELECT c.ORIGINAL_TIMESTAMP::TIMESTAMP_NTZ,DATE_TRUNC('month',c.ORIGINAL_TIMESTAMP::TIMESTAMP_NTZ)::DATE,
+        'web','rp_recommends','FREE_BETS_TAP',NULLIF(TRIM(c.USER_ID::STRING),''),COALESCE(pml.persona,'Unclassified')
+    FROM SEGMENT_EVENTS.RACING_POST_JANUS_WEB_LIVE.FREE_BETS_TAP c
+    LEFT JOIN persona_monthly_latest pml ON pml.month_start=DATE_TRUNC('month',c.ORIGINAL_TIMESTAMP::TIMESTAMP_NTZ)::DATE
+        AND pml.monthly_key=COALESCE(NULLIF(TRIM(c.USER_ID::STRING),''),CONCAT('web:',c.ANONYMOUS_ID))
+    WHERE c.ORIGINAL_TIMESTAMP::DATE BETWEEN (SELECT start_date FROM params) AND (SELECT end_date FROM params)
+    UNION ALL
+    SELECT c.ORIGINAL_TIMESTAMP::TIMESTAMP_NTZ,DATE_TRUNC('month',c.ORIGINAL_TIMESTAMP::TIMESTAMP_NTZ)::DATE,
+        'app','news','BOOKMAKER_REGISTRATION_TAP_IOS',NULLIF(TRIM(c.USER_ID::STRING),''),COALESCE(pml.persona,'Unclassified')
+    FROM SEGMENT_EVENTS.RACING_POST_JANUS_IOS_LIVE.BOOKMAKER_REGISTRATION_TAP c
+    LEFT JOIN persona_monthly_latest pml ON pml.month_start=DATE_TRUNC('month',c.ORIGINAL_TIMESTAMP::TIMESTAMP_NTZ)::DATE
+        AND pml.monthly_key=COALESCE(NULLIF(TRIM(c.USER_ID::STRING),''),CONCAT('ios:',c.CONTEXT_DEVICE_ID))
+    WHERE c.ORIGINAL_TIMESTAMP::DATE BETWEEN (SELECT start_date FROM params) AND (SELECT end_date FROM params)
+    UNION ALL
+    SELECT c.ORIGINAL_TIMESTAMP::TIMESTAMP_NTZ,DATE_TRUNC('month',c.ORIGINAL_TIMESTAMP::TIMESTAMP_NTZ)::DATE,
+        'app','news','BOOKMAKER_REGISTRATION_TAP_ANDROID',NULLIF(TRIM(c.USER_ID::STRING),''),COALESCE(pml.persona,'Unclassified')
+    FROM SEGMENT_EVENTS.RACING_POST_JANUS_ANDROID_LIVE.BOOKMAKER_REGISTRATION_TAP c
+    LEFT JOIN persona_monthly_latest pml ON pml.month_start=DATE_TRUNC('month',c.ORIGINAL_TIMESTAMP::TIMESTAMP_NTZ)::DATE
+        AND pml.monthly_key=COALESCE(NULLIF(TRIM(c.USER_ID::STRING),''),CONCAT('android:',c.CONTEXT_DEVICE_ID))
+    WHERE c.ORIGINAL_TIMESTAMP::DATE BETWEEN (SELECT start_date FROM params) AND (SELECT end_date FROM params)
+),
+clicks_source_month AS (
+    SELECT period_start,platform,persona,desk,source,COUNT(*)::NUMBER(18,0) AS clicks
+    FROM editorial_clicks GROUP BY 1,2,3,4,5
+),
+clicks_source_json AS (
+    SELECT period_start,'month' AS grain,platform,persona,desk,OBJECT_AGG(source,clicks) AS editorial_clicks_by_source
+    FROM clicks_source_month GROUP BY 1,2,3,4,5
+),
+tc_clicks_by_dim AS (
+    SELECT 'month' AS grain,DATE_TRUNC('month',ORIGINAL_TIMESTAMP)::DATE AS period_start,
+        'web' AS platform,'Unclassified' AS persona,'RP Recommends' AS desk,COUNT(*) AS tc_clicks
+    FROM SEGMENT_EVENTS.RACING_POST_JANUS_WEB_LIVE.TC_ARTICLE_CLICK
+    WHERE ORIGINAL_TIMESTAMP::DATE BETWEEN (SELECT start_date FROM params) AND (SELECT end_date FROM params)
+    GROUP BY 1,2,3,4,5
+),
+-- ============================================================
+-- AVERAGE PAGEVIEWS PER STORY
+-- ============================================================
+web_story_pv_raw AS (
+    SELECT
+        w.day_key::DATE                                                 AS day,
+        w.month_key::DATE                                               AS month,
+        'web'                                                           AS platform,
+        COALESCE(pml.persona, 'Unclassified')                          AS persona,
+        CASE WHEN w.NAME IN (SELECT v FROM rp_recommends_name_allowlist) THEN 'rp_recommends'
+             WHEN w.PARENT_TAXONOMY = 'Premium content'                 THEN 'premium_features'
+             WHEN dm.desk IS NOT NULL                                   THEN dm.desk
+             WHEN w.SITE_SECTION IN (SELECT v FROM web_site_section_allowlist) THEN LOWER(w.SITE_SECTION)
+             ELSE 'news' END                                            AS desk,
+        COALESCE(w.PATH, w.URL)                                        AS story_id
+    FROM web_pages_stitched w
+    LEFT JOIN web_desk_map dm ON dm.parent_taxonomy = w.PARENT_TAXONOMY
+    LEFT JOIN persona_monthly_latest pml
+        ON  pml.month_start = w.month_key::DATE
+        AND pml.monthly_key = CASE WHEN w.stitched_user_id_month IS NOT NULL THEN w.stitched_user_id_month
+                                   WHEN w.user_id_norm IS NOT NULL            THEN w.user_id_norm
+                                   ELSE CONCAT('web:', w.ANONYMOUS_ID) END
+    WHERE (w.NAME = 'Article' OR w.NAME IN (SELECT v FROM rp_recommends_name_allowlist))
+    AND   (w.NAME IN (SELECT v FROM web_name_allowlist)
+           OR w.PARENT_TAXONOMY IN (SELECT v FROM web_parent_tax_allowlist)
+           OR w.SITE_SECTION IN (SELECT v FROM web_site_section_allowlist))
+    AND COALESCE(w.PATH, w.URL) IS NOT NULL
+),
+app_story_pv_raw AS (
+    SELECT
+        DATE_TRUNC('day', a.ORIGINAL_TIMESTAMP)::DATE                  AS day,
+        DATE_TRUNC('month', a.ORIGINAL_TIMESTAMP)::DATE                AS month,
+        'app'                                                           AS platform,
+        COALESCE(pml.persona, 'Unclassified')                          AS persona,
+        COALESCE(dm.desk, 'news')                                      AS desk,
+        a.ARTICLE_ID::VARCHAR                                          AS story_id
+    FROM SEGMENT_EVENTS.RACING_POST_JANUS_IOS_LIVE.SCREEN_ARTICLE a
+    LEFT JOIN app_desk_map dm ON dm.parent_taxonomy = a.PARENT_TAXONOMY
+    LEFT JOIN persona_monthly_latest pml
+        ON  pml.month_start = DATE_TRUNC('month', a.ORIGINAL_TIMESTAMP)::DATE
+        AND pml.monthly_key = CASE WHEN NULLIF(TRIM(a.USER_ID),'') IS NOT NULL THEN NULLIF(TRIM(a.USER_ID),'')
+                                   ELSE CONCAT('ios:', a.CONTEXT_DEVICE_ID) END
+    WHERE a.ORIGINAL_TIMESTAMP::DATE BETWEEN (SELECT start_date FROM params) AND (SELECT end_date FROM params)
+    AND a.PARENT_TAXONOMY IN ('News','Horse racing tips','Sport','Bloodstock','Premium content')
+    AND a.ARTICLE_ID IS NOT NULL
+    UNION ALL
+    SELECT
+        DATE_TRUNC('day', a.ORIGINAL_TIMESTAMP)::DATE,
+        DATE_TRUNC('month', a.ORIGINAL_TIMESTAMP)::DATE,
+        'app',
+        COALESCE(pml.persona, 'Unclassified'),
+        COALESCE(dm.desk, 'news'),
+        a.ARTICLE_ID::VARCHAR
+    FROM SEGMENT_EVENTS.RACING_POST_JANUS_ANDROID_LIVE.SCREEN_ARTICLE a
+    LEFT JOIN app_desk_map dm ON dm.parent_taxonomy = a.PARENT_TAXONOMY
+    LEFT JOIN persona_monthly_latest pml
+        ON  pml.month_start = DATE_TRUNC('month', a.ORIGINAL_TIMESTAMP)::DATE
+        AND pml.monthly_key = CASE WHEN NULLIF(TRIM(a.USER_ID),'') IS NOT NULL THEN NULLIF(TRIM(a.USER_ID),'')
+                                   ELSE CONCAT('android:', a.CONTEXT_DEVICE_ID) END
+    WHERE a.ORIGINAL_TIMESTAMP::DATE BETWEEN (SELECT start_date FROM params) AND (SELECT end_date FROM params)
+    AND a.PARENT_TAXONOMY IN (SELECT v FROM app_parent_tax_allowlist)
+    AND a.ARTICLE_ID IS NOT NULL
+),
+web_story_pv_day AS (
+    SELECT 'day' AS grain, day AS period_start, platform, persona, desk, story_id, COUNT(*) AS story_pvs
+    FROM web_story_pv_raw GROUP BY 1,2,3,4,5,6
+),
+web_story_pv_month AS (
+    SELECT 'month' AS grain, month AS period_start, platform, persona, desk, story_id, COUNT(*) AS story_pvs
+    FROM web_story_pv_raw GROUP BY 1,2,3,4,5,6
+),
+app_story_pv_day AS (
+    SELECT 'day' AS grain, day AS period_start, platform, persona, desk, story_id, COUNT(*) AS story_pvs
+    FROM app_story_pv_raw GROUP BY 1,2,3,4,5,6
+),
+app_story_pv_month AS (
+    SELECT 'month' AS grain, month AS period_start, platform, persona, desk, story_id, COUNT(*) AS story_pvs
+    FROM app_story_pv_raw GROUP BY 1,2,3,4,5,6
+),
+all_story_pv AS (
+    SELECT * FROM web_story_pv_day   UNION ALL SELECT * FROM web_story_pv_month
+    UNION ALL SELECT * FROM app_story_pv_day UNION ALL SELECT * FROM app_story_pv_month
+),
+avg_pv_per_story_by_desk AS (
+    SELECT grain, period_start, platform, persona, desk,
+        ROUND(AVG(story_pvs), 2)::NUMBER(18,2) AS avg_pageviews_per_story
+    FROM all_story_pv GROUP BY 1,2,3,4,5
+    UNION ALL
+    SELECT grain, period_start, 'total', persona, desk,
+        ROUND(AVG(story_pvs), 2)::NUMBER(18,2)
+    FROM all_story_pv GROUP BY 1,2,4,5
+),
+avg_pv_per_story_all_editorial AS (
+    SELECT grain, period_start, platform, persona,
+        'All Editorial'                         AS desk,
+        ROUND(AVG(story_pvs), 2)::NUMBER(18,2) AS avg_pageviews_per_story
+    FROM all_story_pv GROUP BY 1,2,3,4
+    UNION ALL
+    SELECT grain, period_start, 'total', persona,
+        'All Editorial',
+        ROUND(AVG(story_pvs), 2)::NUMBER(18,2)
+    FROM all_story_pv GROUP BY 1,2,4
+),
+avg_pv_per_story_all AS (
+    SELECT * FROM avg_pv_per_story_by_desk
+    UNION ALL SELECT * FROM avg_pv_per_story_all_editorial
+),
+-- ============================================================
+-- STORY PUBLICATION TIME WINDOWS
+-- ============================================================
+web_story_first_seen AS (
+    SELECT
+        COALESCE(w.PATH, w.URL)                                     AS story_id,
+        w.TIMESTAMP::TIMESTAMP_NTZ                                  AS ts,
+        'web'                                                       AS platform,
+        DATE_TRUNC('day',  w.TIMESTAMP::TIMESTAMP_NTZ)::DATE        AS day,
+        DATE_TRUNC('month',w.TIMESTAMP::TIMESTAMP_NTZ)::DATE        AS month,
+        CASE
+            WHEN w.NAME IN (SELECT v FROM rp_recommends_name_allowlist) THEN 'rp_recommends'
+            WHEN w.PARENT_TAXONOMY = 'Premium content'              THEN 'premium_features'
+            WHEN dm.desk IS NOT NULL                                THEN dm.desk
+            WHEN w.SITE_SECTION IN (SELECT v FROM web_site_section_allowlist) THEN LOWER(w.SITE_SECTION)
+            ELSE 'news'
+        END                                                         AS desk
+    FROM web_pages_stitched w
+    LEFT JOIN web_desk_map dm ON dm.parent_taxonomy = w.PARENT_TAXONOMY
+    WHERE (w.NAME = 'Article' OR w.NAME IN (SELECT v FROM rp_recommends_name_allowlist))
+    AND   (w.NAME          IN (SELECT v FROM web_name_allowlist)
+           OR w.PARENT_TAXONOMY IN (SELECT v FROM web_parent_tax_allowlist)
+           OR w.SITE_SECTION    IN (SELECT v FROM web_site_section_allowlist))
+    AND   COALESCE(w.PATH, w.URL) IS NOT NULL
+    QUALIFY ROW_NUMBER() OVER (
+        PARTITION BY COALESCE(w.PATH, w.URL)
+        ORDER BY w.TIMESTAMP::TIMESTAMP_NTZ
+    ) = 1
+),
+app_story_first_seen AS (
+    SELECT
+        a.ARTICLE_ID::VARCHAR                                       AS story_id,
+        a.ORIGINAL_TIMESTAMP::TIMESTAMP_NTZ                        AS ts,
+        'app'                                                       AS platform,
+        DATE_TRUNC('day',  a.ORIGINAL_TIMESTAMP::TIMESTAMP_NTZ)::DATE AS day,
+        DATE_TRUNC('month',a.ORIGINAL_TIMESTAMP::TIMESTAMP_NTZ)::DATE AS month,
+        COALESCE(dm.desk,'news')                                    AS desk
+    FROM SEGMENT_EVENTS.RACING_POST_JANUS_IOS_LIVE.SCREEN_ARTICLE a
+    LEFT JOIN app_desk_map dm ON dm.parent_taxonomy = a.PARENT_TAXONOMY
+    WHERE a.ORIGINAL_TIMESTAMP::DATE BETWEEN (SELECT start_date FROM params) AND (SELECT end_date FROM params)
+    AND   a.PARENT_TAXONOMY IN (SELECT v FROM app_parent_tax_allowlist)
+    AND   a.ARTICLE_ID IS NOT NULL
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY a.ARTICLE_ID ORDER BY a.ORIGINAL_TIMESTAMP) = 1
+    UNION ALL
+    SELECT
+        a.ARTICLE_ID::VARCHAR,
+        a.ORIGINAL_TIMESTAMP::TIMESTAMP_NTZ,
+        'app',
+        DATE_TRUNC('day',  a.ORIGINAL_TIMESTAMP::TIMESTAMP_NTZ)::DATE,
+        DATE_TRUNC('month',a.ORIGINAL_TIMESTAMP::TIMESTAMP_NTZ)::DATE,
+        COALESCE(dm.desk,'news')
+    FROM SEGMENT_EVENTS.RACING_POST_JANUS_ANDROID_LIVE.SCREEN_ARTICLE a
+    LEFT JOIN app_desk_map dm ON dm.parent_taxonomy = a.PARENT_TAXONOMY
+    WHERE a.ORIGINAL_TIMESTAMP::DATE BETWEEN (SELECT start_date FROM params) AND (SELECT end_date FROM params)
+    AND   a.PARENT_TAXONOMY IN (SELECT v FROM app_parent_tax_allowlist)
+    AND   a.ARTICLE_ID IS NOT NULL
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY a.ARTICLE_ID ORDER BY a.ORIGINAL_TIMESTAMP) = 1
+),
+all_story_first_seen AS (
+    SELECT * FROM web_story_first_seen
+    UNION ALL
+    SELECT story_id, MIN(ts) AS ts, platform, MIN(day) AS day, MIN(month) AS month, desk
+    FROM app_story_first_seen
+    GROUP BY story_id, platform, desk
+),
+story_with_time_window AS (
+    SELECT
+        story_id, platform, day, month, desk,
+        CASE
+            WHEN HOUR(ts) BETWEEN 7  AND 9  THEN '7-10am'
+            WHEN HOUR(ts) BETWEEN 11 AND 13 THEN '11-2pm'
+            WHEN HOUR(ts) BETWEEN 15 AND 17 THEN '3-5pm'
+            WHEN HOUR(ts) >= 18             THEN '6pm+'
+            ELSE 'other'
+        END                                                         AS time_window
+    FROM all_story_first_seen
+),
+story_tw_pct_by_desk AS (
+    SELECT
+        grain, period_start, platform, desk, time_window,
+        ROUND(
+            COUNT(DISTINCT story_id) * 100.0 /
+            NULLIF(SUM(COUNT(DISTINCT story_id)) OVER (PARTITION BY grain, period_start, platform, desk), 0)
+        , 2)::NUMBER(18,2)                                          AS pct_stories
+    FROM (
+        SELECT 'day'   AS grain, day   AS period_start, platform, desk, story_id, time_window FROM story_with_time_window
+        UNION ALL
+        SELECT 'month',          month,                 platform, desk, story_id, time_window FROM story_with_time_window
+    )
+    GROUP BY grain, period_start, platform, desk, time_window
+    UNION ALL
+    SELECT
+        grain, period_start, 'total' AS platform, desk, time_window,
+        ROUND(
+            COUNT(DISTINCT story_id) * 100.0 /
+            NULLIF(SUM(COUNT(DISTINCT story_id)) OVER (PARTITION BY grain, period_start, desk), 0)
+        , 2)::NUMBER(18,2)
+    FROM (
+        SELECT 'day'   AS grain, day   AS period_start, desk, story_id, time_window FROM story_with_time_window
+        UNION ALL
+        SELECT 'month',          month,                 desk, story_id, time_window FROM story_with_time_window
+    )
+    GROUP BY grain, period_start, desk, time_window
+),
+story_tw_pct_all_editorial AS (
+    SELECT grain, period_start, platform, 'All Editorial' AS desk, time_window,
+        ROUND(
+            COUNT(DISTINCT story_id) * 100.0 /
+            NULLIF(SUM(COUNT(DISTINCT story_id)) OVER (PARTITION BY grain, period_start, platform), 0)
+        , 2)::NUMBER(18,2)                                          AS pct_stories
+    FROM (
+        SELECT 'day'   AS grain, day   AS period_start, platform, story_id, time_window FROM story_with_time_window
+        UNION ALL
+        SELECT 'month',          month,                 platform, story_id, time_window FROM story_with_time_window
+        UNION ALL
+        SELECT 'day',            day,   'total',        story_id, time_window FROM story_with_time_window
+        UNION ALL
+        SELECT 'month',          month, 'total',        story_id, time_window FROM story_with_time_window
+    )
+    GROUP BY grain, period_start, platform, time_window
+),
+story_tw_json AS (
+    SELECT grain, period_start, platform, desk,
+        OBJECT_AGG(time_window, pct_stories::VARIANT)               AS pct_stories_by_time_window
+    FROM (
+        SELECT * FROM story_tw_pct_by_desk
+        UNION ALL SELECT * FROM story_tw_pct_all_editorial
+    )
+    GROUP BY grain, period_start, platform, desk
+),
+stories_published AS (
+
+    -- ── day grain · web · by desk ─────────────────────────────────────────
+    SELECT 'day' AS grain, period_start, 'web' AS platform, desk,
+           COUNT(DISTINCT story_id)::NUMBER(18,0) AS stories_published
+    FROM (
+        SELECT day AS period_start, desk, story_id
+        FROM web_story_pv_raw
+        QUALIFY ROW_NUMBER() OVER (PARTITION BY story_id ORDER BY day) = 1
+    )
+    GROUP BY 1,2,3,4
+
+    UNION ALL
+
+    -- ── day grain · app · by desk ─────────────────────────────────────────
+    SELECT 'day' AS grain, period_start, 'app' AS platform, desk,
+           COUNT(DISTINCT story_id)::NUMBER(18,0) AS stories_published
+    FROM (
+        SELECT day AS period_start, desk, story_id
+        FROM app_story_pv_raw
+        QUALIFY ROW_NUMBER() OVER (PARTITION BY story_id ORDER BY day) = 1
+    )
+    GROUP BY 1,2,3,4
+
+    UNION ALL
+
+    -- ── day grain · total · by desk ───────────────────────────────────────
+    SELECT 'day' AS grain, period_start, 'total' AS platform, desk,
+           COUNT(DISTINCT story_id)::NUMBER(18,0) AS stories_published
+    FROM (
+        SELECT day AS period_start, desk, story_id
+        FROM web_story_pv_raw
+        QUALIFY ROW_NUMBER() OVER (PARTITION BY story_id ORDER BY day) = 1
+        UNION ALL
+        SELECT day AS period_start, desk, story_id
+        FROM app_story_pv_raw
+        QUALIFY ROW_NUMBER() OVER (PARTITION BY story_id ORDER BY day) = 1
+    )
+    GROUP BY 1,2,3,4
+
+    UNION ALL
+
+    -- ── month grain · web · by desk ───────────────────────────────────────
+    SELECT 'month' AS grain, period_start, 'web' AS platform, desk,
+           COUNT(DISTINCT story_id)::NUMBER(18,0) AS stories_published
+    FROM (
+        SELECT month AS period_start, desk, story_id
+        FROM web_story_pv_raw
+        QUALIFY ROW_NUMBER() OVER (PARTITION BY story_id ORDER BY month) = 1
+    )
+    GROUP BY 1,2,3,4
+
+    UNION ALL
+
+    -- ── month grain · app · by desk ───────────────────────────────────────
+    SELECT 'month' AS grain, period_start, 'app' AS platform, desk,
+           COUNT(DISTINCT story_id)::NUMBER(18,0) AS stories_published
+    FROM (
+        SELECT month AS period_start, desk, story_id
+        FROM app_story_pv_raw
+        QUALIFY ROW_NUMBER() OVER (PARTITION BY story_id ORDER BY month) = 1
+    )
+    GROUP BY 1,2,3,4
+
+    UNION ALL
+
+    -- ── month grain · total · by desk ─────────────────────────────────────
+    SELECT 'month' AS grain, period_start, 'total' AS platform, desk,
+           COUNT(DISTINCT story_id)::NUMBER(18,0) AS stories_published
+    FROM (
+        SELECT month AS period_start, desk, story_id
+        FROM web_story_pv_raw
+        QUALIFY ROW_NUMBER() OVER (PARTITION BY story_id ORDER BY month) = 1
+        UNION ALL
+        SELECT month AS period_start, desk, story_id
+        FROM app_story_pv_raw
+        QUALIFY ROW_NUMBER() OVER (PARTITION BY story_id ORDER BY month) = 1
+    )
+    GROUP BY 1,2,3,4
+
+    UNION ALL
+
+    -- ── All Editorial rollup · day · web ──────────────────────────────────
+    SELECT 'day' AS grain, period_start, 'web' AS platform,
+           'All Editorial' AS desk,
+           COUNT(DISTINCT story_id)::NUMBER(18,0) AS stories_published
+    FROM (
+        SELECT day AS period_start, story_id
+        FROM web_story_pv_raw
+        QUALIFY ROW_NUMBER() OVER (PARTITION BY story_id ORDER BY day) = 1
+    )
+    GROUP BY 1,2,3,4
+
+    UNION ALL
+
+    -- ── All Editorial rollup · day · app ──────────────────────────────────
+    SELECT 'day' AS grain, period_start, 'app' AS platform,
+           'All Editorial' AS desk,
+           COUNT(DISTINCT story_id)::NUMBER(18,0) AS stories_published
+    FROM (
+        SELECT day AS period_start, story_id
+        FROM app_story_pv_raw
+        QUALIFY ROW_NUMBER() OVER (PARTITION BY story_id ORDER BY day) = 1
+    )
+    GROUP BY 1,2,3,4
+
+    UNION ALL
+
+    -- ── All Editorial rollup · day · total ────────────────────────────────
+    SELECT 'day' AS grain, period_start, 'total' AS platform,
+           'All Editorial' AS desk,
+           COUNT(DISTINCT story_id)::NUMBER(18,0) AS stories_published
+    FROM (
+        SELECT day AS period_start, story_id
+        FROM web_story_pv_raw
+        QUALIFY ROW_NUMBER() OVER (PARTITION BY story_id ORDER BY day) = 1
+        UNION ALL
+        SELECT day AS period_start, story_id
+        FROM app_story_pv_raw
+        QUALIFY ROW_NUMBER() OVER (PARTITION BY story_id ORDER BY day) = 1
+    )
+    GROUP BY 1,2,3,4
+
+    UNION ALL
+
+    -- ── All Editorial rollup · month · web ────────────────────────────────
+    SELECT 'month' AS grain, period_start, 'web' AS platform,
+           'All Editorial' AS desk,
+           COUNT(DISTINCT story_id)::NUMBER(18,0) AS stories_published
+    FROM (
+        SELECT month AS period_start, story_id
+        FROM web_story_pv_raw
+        QUALIFY ROW_NUMBER() OVER (PARTITION BY story_id ORDER BY month) = 1
+    )
+    GROUP BY 1,2,3,4
+
+    UNION ALL
+
+    -- ── All Editorial rollup · month · app ────────────────────────────────
+    SELECT 'month' AS grain, period_start, 'app' AS platform,
+           'All Editorial' AS desk,
+           COUNT(DISTINCT story_id)::NUMBER(18,0) AS stories_published
+    FROM (
+        SELECT month AS period_start, story_id
+        FROM app_story_pv_raw
+        QUALIFY ROW_NUMBER() OVER (PARTITION BY story_id ORDER BY month) = 1
+    )
+    GROUP BY 1,2,3,4
+
+    UNION ALL
+
+    -- ── All Editorial rollup · month · total ──────────────────────────────
+    SELECT 'month' AS grain, period_start, 'total' AS platform,
+           'All Editorial' AS desk,
+           COUNT(DISTINCT story_id)::NUMBER(18,0) AS stories_published
+    FROM (
+        SELECT month AS period_start, story_id
+        FROM web_story_pv_raw
+        QUALIFY ROW_NUMBER() OVER (PARTITION BY story_id ORDER BY month) = 1
+        UNION ALL
+        SELECT month AS period_start, story_id
+        FROM app_story_pv_raw
+        QUALIFY ROW_NUMBER() OVER (PARTITION BY story_id ORDER BY month) = 1
+    )
+    GROUP BY 1,2,3,4
+
+)
+-- ============================================================
+-- FINAL SELECT
+-- ============================================================
+SELECT
+    m.grain,
+    m.period_start,
+    m.platform,
+    m.persona,
+    CASE
+        WHEN m.desk='ALL_EDITORIAL'    THEN 'All Editorial'
+        WHEN m.desk='All Editorial'    THEN 'All Editorial'
+        WHEN m.desk='all'              THEN 'All'
+        WHEN m.desk='All'              THEN 'All'
+        WHEN m.desk='news'             THEN 'News'
+        WHEN m.desk='tipping'          THEN 'Tipping'
+        WHEN m.desk='rp_recommends'    THEN 'RP Recommends'
+        WHEN m.desk='tc'               THEN 'TC'
+        WHEN m.desk='premium_features' THEN 'Premium Features'
+        WHEN m.desk='bloodstock'       THEN 'Bloodstock'
+        WHEN m.desk='greyhounds'       THEN 'Greyhounds'
+        WHEN m.desk='sport'            THEN 'Sport'
+        ELSE INITCAP(REPLACE(m.desk,'_',' '))
+    END AS desk,
+    m.users,
+    m.users                                                             AS desk_audience_users,
+    m.events,
+    m.users_logged_in,
+    m.events_logged_in,
+    m.users_subscriber,
+    m.events_subscriber,
+    m.users_free,
+    m.events_free,
+    m.users_premium,
+    m.events_premium,
+    m.users_barrier,
+    m.barrier_events,
+    n.net_subscribers,
+    ad.total_active_days,
+    IFF(m.grain='month' AND m.desk!='All',
+        ROUND(CASE WHEN COALESCE(m.users_subscriber,0)=0 THEN NULL
+              ELSE m.users_premium/m.users_subscriber*100 END,2),
+        NULL)                                                           AS pct_subscribers_consuming_premium,
+    IFF(m.desk!='All', ftd.total_ftds_from_editorial,      NULL)        AS total_ftds_from_editorial,
+    IFF(m.desk!='All', ftd.total_ftds_from_tc,             NULL)        AS total_ftds_from_tc,
+    IFF(m.desk!='All', ftd.total_ftds_from_recs,           NULL)        AS total_ftds_from_recs,
+    IFF(m.desk!='All', ftd.total_ftds_from_tc_and_recs,    NULL)        AS total_ftds_from_tc_and_recs,
+    IFF(m.desk!='All', ftd.total_ftds_from_editorial_plus, NULL)        AS total_ftds_from_editorial_plus,
+    cl.total_clicks_from_editorial,
+    tr.traffic_events_to_tc_and_recs,
+    tv.traffic_visitors_to_tc_and_recs,
+    m.users_subscriber_ultimate,
+    m.users_subscriber_tipping,
+    m.is_subscriber,
+    m.editorial_subscribers,
+    m.subscriber_flag,
+    IFF(m.grain='month' AND m.platform IN ('web','app') AND m.desk IN ('ALL_EDITORIAL','All Editorial'),
+        um.daily_avg_pct_ultimate_consuming_editorial,NULL)::NUMBER(18,2) AS daily_avg_pct_ultimate_consuming_editorial,
+    IFF(m.grain='month' AND m.platform IN ('web','app') AND m.desk IN ('ALL_EDITORIAL','All Editorial'),
+        tm.daily_avg_pct_tipping_consuming_editorial,NULL)::NUMBER(18,2) AS daily_avg_pct_tipping_consuming_editorial,
+    IFF(m.grain='day',
+        ROUND(AVG(m.pageviews) OVER (
+            PARTITION BY m.grain,m.platform,m.persona,m.desk,DAYOFWEEK(m.period_start)
+            ORDER BY m.period_start ROWS BETWEEN 12 PRECEDING AND CURRENT ROW),2),
+        m.pageviews)::NUMBER(18,0)                                      AS pageviews,
+    IFF(m.grain='month' AND m.desk IN ('ALL_EDITORIAL','All Editorial')
+        AND COALESCE(m.editorial_subscribers,0)>0,
+        ROUND(ad.total_active_days/NULLIF(m.editorial_subscribers,0),2),
+        NULL)::NUMBER(18,2)                                             AS active_days_per_editorial_subscriber,
+    m.unique_sessions,
+    ROUND(m.pageviews::FLOAT/NULLIF(m.unique_sessions,0),2)::NUMBER(18,2) AS pageviews_per_unique_session,
+    IFF(
+    COALESCE(m.users, 0) > 0 AND COALESCE(m.unique_sessions, 0) > 0,
+    m.pageviews / NULLIF(m.users * m.unique_sessions, 0),
+    NULL
+)::FLOAT AS pageviews_per_user_per_session,
+    IFF(m.grain='day',
+        ROUND(AVG(m.pageviews::FLOAT/NULLIF(m.unique_sessions,0)) OVER (
+            PARTITION BY m.grain,m.platform,m.persona,m.desk,DAYOFWEEK(m.period_start)
+            ORDER BY m.period_start ROWS BETWEEN 13 PRECEDING AND 1 PRECEDING),2),
+        NULL)::NUMBER(18,2)                                             AS pageviews_per_session_dow_avg,
+    IFF(m.grain='day',
+        ROUND((m.pageviews::FLOAT/NULLIF(m.unique_sessions,0))
+            -AVG(m.pageviews::FLOAT/NULLIF(m.unique_sessions,0)) OVER (
+                PARTITION BY m.grain,m.platform,m.persona,m.desk,DAYOFWEEK(m.period_start)
+                ORDER BY m.period_start ROWS BETWEEN 13 PRECEDING AND 1 PRECEDING),2),
+        NULL)::NUMBER(18,2)                                             AS pageviews_vs_dow_avg,
+    IFF(m.grain='day',
+        ROUND(((m.pageviews::FLOAT/NULLIF(m.unique_sessions,0))
+            -AVG(m.pageviews::FLOAT/NULLIF(m.unique_sessions,0)) OVER (
+                PARTITION BY m.grain,m.platform,m.persona,m.desk,DAYOFWEEK(m.period_start)
+                ORDER BY m.period_start ROWS BETWEEN 13 PRECEDING AND 1 PRECEDING))
+            /NULLIF(AVG(m.pageviews::FLOAT/NULLIF(m.unique_sessions,0)) OVER (
+                PARTITION BY m.grain,m.platform,m.persona,m.desk,DAYOFWEEK(m.period_start)
+                ORDER BY m.period_start ROWS BETWEEN 13 PRECEDING AND 1 PRECEDING),0)*100,2),
+        NULL)::NUMBER(18,2)                                             AS pageviews_pct_vs_dow_avg,
+    m.premium_editorial_users,
+    m.free_editorial_users,
+    TO_VARCHAR(cs.editorial_clicks_by_source)                           AS editorial_clicks_by_source,
+    TO_VARCHAR(fs.ftds_by_source)                                       AS ftds_by_source,
+    COALESCE(
+        TRY_TO_NUMBER(
+            GET(TRY_PARSE_JSON(TO_VARCHAR(cs.editorial_clicks_by_source)),'TC_ARTICLE_CLICK')::STRING
+        ),0
+    )                                                                   AS tc_clicks,
+    fsl.ftd_source   AS FTD_SOURCE,
+    tr.tc_traffic_events,
+    tr.rc_traffic_events,
+    apvs.avg_pageviews_per_story                                        AS avg_pageviews_per_story,
+    TO_VARCHAR(stw.pct_stories_by_time_window)                          AS pct_stories_by_time_window,
+    sp.stories_published                                                AS stories_published
+
+FROM (
+    SELECT * FROM total_metrics
+    UNION ALL SELECT * FROM editorial_metrics_by_desk
+    UNION ALL SELECT * FROM editorial_metrics_all_editorial
+) m
+LEFT JOIN net_subscriber_calc n
+    ON n.grain=m.grain AND n.period_start=m.period_start AND n.platform=m.platform AND n.persona=m.persona AND n.desk=m.desk
+LEFT JOIN active_days_all ad
+    ON  ad.grain        = m.grain
+    AND ad.period_start = m.period_start
+    AND ad.platform     = m.platform
+    AND ad.persona      = m.persona
+    AND ad.desk         = m.desk
+LEFT JOIN ftd_all ftd
+    ON ftd.grain=m.grain AND ftd.period_start=m.period_start AND ftd.platform=m.platform AND ftd.persona=m.persona
+    AND ftd.desk=CASE
+        WHEN m.desk IN ('ALL_EDITORIAL','All Editorial') THEN 'All Editorial'
+        WHEN m.desk IN ('news','News')                   THEN 'news'
+        WHEN m.desk IN ('rp_recommends','RP Recommends') THEN 'rp_recommends'
+        ELSE m.desk END
+LEFT JOIN clicks_all cl
+    ON cl.grain=m.grain AND cl.period_start=m.period_start AND cl.platform=m.platform AND cl.persona=m.persona AND cl.desk=m.desk
+LEFT JOIN traffic_all tr
+    ON tr.grain=m.grain AND tr.period_start=m.period_start AND tr.platform=m.platform AND tr.persona=m.persona AND tr.desk=m.desk
+LEFT JOIN ultimate_month_daily_avg um
+    ON um.period_start=m.period_start AND um.platform=m.platform
+LEFT JOIN tipping_month_daily_avg tm
+    ON tm.period_start=m.period_start AND tm.platform=m.platform
+LEFT JOIN traffic_visitors_all tv
+    ON tv.grain=m.grain AND tv.period_start=m.period_start AND tv.platform=m.platform AND tv.persona=m.persona AND tv.desk=m.desk
+LEFT JOIN clicks_source_json cs
+    ON cs.grain=m.grain AND cs.period_start=m.period_start AND cs.platform=m.platform AND cs.persona=m.persona AND cs.desk=m.desk
+LEFT JOIN ftd_source_json fs
+    ON fs.grain=m.grain AND fs.period_start=m.period_start AND fs.platform=m.platform AND fs.persona=m.persona
+    AND fs.desk=CASE WHEN m.desk IN ('ALL_EDITORIAL','All Editorial') THEN 'All Editorial' ELSE m.desk END
+LEFT JOIN avg_pv_per_story_all apvs
+    ON  apvs.grain        = m.grain
+    AND apvs.period_start = m.period_start
+    AND apvs.platform     = m.platform
+    AND apvs.persona      = m.persona
+    AND apvs.desk         = m.desk
+LEFT JOIN story_tw_json stw
+    ON  stw.grain        = m.grain
+    AND stw.period_start = m.period_start
+    AND stw.platform     = m.platform
+    AND stw.desk         = m.desk
+
+LEFT JOIN stories_published sp
+    ON  sp.grain        = m.grain
+    AND sp.period_start = m.period_start
+    AND sp.platform     = m.platform
+    AND sp.desk         = CASE
+        WHEN m.desk IN ('ALL_EDITORIAL','All Editorial') THEN 'All Editorial'
+        WHEN m.desk IN ('news','News')                   THEN 'news'
+        WHEN m.desk IN ('rp_recommends','RP Recommends') THEN 'rp_recommends'
+        ELSE m.desk END
+LEFT JOIN ftd_source_lookup fsl
+    ON  fsl.grain        = m.grain
+    AND fsl.period_start = m.period_start
+    AND fsl.platform     = m.platform
+    AND fsl.desk         = m.desk
+ORDER BY grain, period_start, platform, persona, desk;
